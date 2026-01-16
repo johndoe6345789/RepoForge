@@ -1,0 +1,26 @@
+name: mirror-repository
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mirror repository
+        uses: yesolutions/mirror-action@v0.7.0
+        with:
+          REMOTE_NAME: git
+          REMOTE: https://git.wardcrew.com/git/repoforge.git
+          GIT_USERNAME: git
+          GIT_PASSWORD: 4wHhnUX7n7pVaFZi
+          PUSH_ALL_REFS: true
+          GIT_PUSH_ARGS: --tags --force --prune
