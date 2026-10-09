@@ -1,45 +1,131 @@
-name: Android CI
+name: Build and Publish APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
-    permissions:
-      contents: read
+    outputs:
+      version_name: ${{ steps.version.outputs.name }}
 
     steps:
-    - uses: actions/checkout@v4
-    
+    - name: Checkout code
+      uses: actions/checkout@v4
+
     - name: Set up JDK 21
       uses: actions/setup-java@v4
       with:
-        java-version: '21'
+        java-version: '21'  # Robolectric's Android runtime needs JDK 21 (the app still targets Java 17)
         distribution: 'temurin'
         cache: gradle
+
+    - name: Install Android 17 (API 37) SDK
+      run: |
+        yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+        "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0"
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Unit tests
-      run: ./gradlew testDebugUnitTest
+    # Every build gets a higher versionCode than the last, so a newer APK installs over an older one.
+    - name: Compute version
+      id: version
+      run: |
+        echo "VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+        echo "VERSION_NAME=0.5.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+        echo "name=0.5.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
 
-    - name: Build with Gradle
-      run: ./gradlew assembleDebug assembleRelease
+    - name: Lint and unit tests
+      run: ./gradlew lintDebug testDebugUnitTest
 
-    - name: Upload debug APK
+    - name: Record UI screenshots
+      run: ./gradlew testDebugUnitTest -Pscreenshots --tests '*ScreenshotTest*'
+
+    - name: Upload UI screenshots
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: app-debug
-        path: app/build/outputs/apk/debug/app-debug.apk
+        name: ui-screenshots
+        path: app/screenshots/
+        if-no-files-found: ignore
 
-    - name: Upload release APK (unsigned)
+    - name: Build debug APK
+      run: ./gradlew assembleDebug
+
+    # Optional: a minified release build signed with your own key, when the repository has the
+    # RELEASE_KEYSTORE_BASE64 / RELEASE_STORE_PASSWORD / RELEASE_KEY_ALIAS / RELEASE_KEY_PASSWORD secrets.
+    - name: Build signed release APK
+      env:
+        RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+        RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+      run: |
+        if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
+          echo "No release signing key configured; publishing the debug-signed APK only."
+          exit 0
+        fi
+        export RELEASE_KEYSTORE="$RUNNER_TEMP/release.keystore"
+        echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$RELEASE_KEYSTORE"
+        ./gradlew assembleRelease
+
+    - name: Collect APKs
+      run: |
+        mkdir -p dist
+        cp app/build/outputs/apk/debug/app-debug.apk "dist/RepoForge-$VERSION_NAME-debug.apk"
+        if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+          cp app/build/outputs/apk/release/app-release.apk "dist/RepoForge-$VERSION_NAME.apk"
+        fi
+        ls -l dist
+
+    - name: Upload APKs
       uses: actions/upload-artifact@v4
       with:
-        name: app-release-unsigned
-        path: app/build/outputs/apk/release/app-release-unsigned.apk
+        name: apks-${{ env.VERSION_NAME }}
+        path: dist/*.apk
+
+  # Publishes a GitHub Release for every commit that lands on main. Only this job can write to the repo.
+  publish:
+    needs: build
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download APKs
+      uses: actions/download-artifact@v4
+      with:
+        name: apks-${{ needs.build.outputs.version_name }}
+        path: dist
+
+    - name: Create GitHub Release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ needs.build.outputs.version_name }}
+        COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+      run: |
+        SHORT_SHA="${GITHUB_SHA::7}"
+        SUBJECT="$(printf '%s\n' "$COMMIT_MESSAGE" | head -n 1)"
+        cat > notes.md <<EOF
+        Built from [\`$SHORT_SHA\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA): $SUBJECT
+
+        **Install:** download \`RepoForge-$VERSION-debug.apk\` below on your phone and open it.
+        Each release installs over the previous one, keeping your accounts and clones.
+
+        Android 8.0+ · built against Android 17 (API 37).
+        EOF
+        gh release create "v$VERSION" dist/*.apk \
+          --repo "$GITHUB_REPOSITORY" \
+          --target "$GITHUB_SHA" \
+          --title "RepoForge $VERSION" \
+          --notes-file notes.md \
+          --latest
