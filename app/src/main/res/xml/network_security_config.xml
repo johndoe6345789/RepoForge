@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      Self-hosted GitLab / Gitea / Forgejo servers often use a private or self-signed CA.
+      Trusting user-installed CAs lets people install their server's CA in Android settings
+      (Security → Encryption & credentials → Install a certificate) instead of disabling TLS checks.
+      Cleartext HTTP is allowed for LAN servers; the sign-in screen warns before sending a token over it.
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
