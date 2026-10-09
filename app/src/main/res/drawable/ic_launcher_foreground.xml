@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A branching commit graph inside the adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M42,42 L42,66 M68,48 C68,60 42,56 42,66"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeColor="#FFFFFFFF" />
+    <path
+        android:pathData="M42,29 m-7,0 a7,7 0,1 1,14 0 a7,7 0,1 1,-14 0 M42,73 m-7,0 a7,7 0,1 1,14 0 a7,7 0,1 1,-14 0 M68,41 m-7,0 a7,7 0,1 1,14 0 a7,7 0,1 1,-14 0"
+        android:strokeWidth="5"
+        android:strokeColor="#FFFFFFFF" />
+</vector>
