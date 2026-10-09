@@ -1,6 +1,8 @@
 package com.repoforge.data.net
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import java.io.OutputStream
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -69,6 +71,46 @@ class Http(
         execute(Request.Builder().url(url).header("Accept", accept))
 
     suspend fun getJson(spec: UrlSpec.() -> Unit): HttpResult = get(url(spec))
+
+    /** Plain-text responses such as CI logs; redirects to storage hosts are followed. */
+    suspend fun getText(url: HttpUrl): String = get(url, accept = "*/*").text
+
+    /**
+     * Streams a (possibly large) download into [out], reporting bytes written and the total
+     * when known. Authentication is dropped by OkHttp if the server redirects to another host.
+     */
+    suspend fun download(url: HttpUrl, out: OutputStream, onProgress: (Long, Long?) -> Unit): Long =
+        withContext(Dispatchers.IO) {
+            val request = Request.Builder().url(url).header("Accept", "*/*").apply(authorize).build()
+            val call = client.newCall(request)
+            val response = try {
+                call.execute()
+            } catch (e: IOException) {
+                throw ForgeException(0, "${ForgeException.NETWORK_PREFIX}: ${e.message ?: e.javaClass.simpleName}", e)
+            }
+            response.use {
+                if (!it.isSuccessful) throw ForgeException(it.code, describeError(it.code, it.body.bytes()))
+                val total = it.body.contentLength().takeIf { length -> length >= 0 }
+                val buffer = ByteArray(64 * 1024)
+                var written = 0L
+                var reported = 0L
+                it.body.byteStream().use { input ->
+                    while (true) {
+                        coroutineContext.ensureActive()
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        out.write(buffer, 0, n)
+                        written += n
+                        if (written - reported >= 256 * 1024) {
+                            reported = written
+                            onProgress(written, total)
+                        }
+                    }
+                }
+                onProgress(written, total)
+                written
+            }
+        }
 
     suspend fun postJson(url: HttpUrl, body: JsonObject): HttpResult = send("POST", url, body)
 

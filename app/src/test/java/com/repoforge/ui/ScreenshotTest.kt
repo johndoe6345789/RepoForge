@@ -8,6 +8,11 @@ import com.repoforge.data.forge.Diffs
 import com.repoforge.data.forge.ForgeClient
 import com.repoforge.data.model.Account
 import com.repoforge.data.model.Branch
+import com.repoforge.data.model.CiArtifact
+import com.repoforge.data.model.CiFeatures
+import com.repoforge.data.model.CiJob
+import com.repoforge.data.model.CiRun
+import com.repoforge.data.model.CiStatus
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
@@ -46,6 +51,13 @@ import kotlinx.coroutines.Dispatchers
 import okhttp3.OkHttpClient
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
+import com.repoforge.data.ci.ArchiveEntry
+import com.repoforge.data.ci.ArtifactFiles
+import com.repoforge.ui.ci.ArtifactDownload
+import com.repoforge.ui.ci.CiLogModel
+import com.repoforge.ui.ci.CiLogScreen
+import com.repoforge.ui.ci.CiRunModel
+import com.repoforge.ui.ci.CiRunScreen
 import com.repoforge.data.ai.AiResolution
 import com.repoforge.data.ai.ConflictAi
 import com.repoforge.data.git.ConflictMarkers
@@ -255,6 +267,37 @@ class ScreenshotTest {
     }
 
     @Test
+    fun ciRuns() = shoot("15-ci-runs") {
+        RepoScreen(RepoModel(scope, account, client, repo).apply { tab = RepoTab.CI }, {}, {}, {}, {}, {})
+    }
+
+    private fun runModel() = CiRunModel(scope, client, repo, SampleClient.runs[1], ArtifactFiles(RuntimeEnvironment.getApplication())).apply {
+        // Show the first artifact as downloaded, with the files inside it.
+        downloads["a1"] = ArtifactDownload.Done(
+            File("app-debug.zip"),
+            listOf(ArchiveEntry("app-debug.apk", 28_204_011), ArchiveEntry("mapping/output-metadata.json", 397)),
+        )
+        downloads["a2"] = ArtifactDownload.Running(180_000, 412_908)
+    }
+
+    @Test
+    fun ciRun() = shoot("16-ci-run") { CiRunScreen(runModel(), {}, {}) }
+
+    @Test
+    fun ciRunDark() = shoot("16-ci-run-dark", dark = true) { CiRunScreen(runModel(), {}, {}) }
+
+    private fun logModel() = runBlocking {
+        val run = SampleClient.runs[1]
+        CiLogModel(scope, client, repo, run, client.listCiJobs(repo, run)[1], tmp.root)
+    }
+
+    @Test
+    fun ciLog() = shoot("17-ci-log") { CiLogScreen(logModel(), {}) }
+
+    @Test
+    fun ciLogDark() = shoot("17-ci-log-dark", dark = true) { CiLogScreen(logModel(), {}) }
+
+    @Test
     fun localRepos() {
         val clones = listOf(
             LocalClone("1", "id", "ada/analytical-engine", "analytical-engine", "/storage/emulated/0/Documents/RepoForge/analytical-engine", "", null, System.currentTimeMillis() - 7_200_000),
@@ -276,6 +319,21 @@ private class SampleClient : ForgeClient {
     companion object {
         private val now: Instant = Instant.now()
         private fun ago(hours: Long): Instant = now.minus(hours, ChronoUnit.HOURS)
+
+        val runs by lazy {
+            listOf(
+                CiRun("101", 214, "Loop construct for the mill", "Android CI", "feature/loops", "3f2a9c1d7e", "merge request",
+                    CiStatus.RUNNING, ada, now.minusSeconds(140), now.minusSeconds(140), null, null),
+                CiRun("100", 213, "Loop construct for the mill", "Android CI", "feature/loops", "9b8c7d6e5f", "push",
+                    CiStatus.FAILURE, ada, ago(3), ago(3), ago(3).plusSeconds(498), null),
+                CiRun("99", 212, "Store results in the store", "Android CI", "main", "1a2b3c4d5e", "push",
+                    CiStatus.SUCCESS, grace, ago(20), ago(20), ago(20).plusSeconds(431), null),
+                CiRun("98", 211, "Nightly build", "Nightly", "main", "1a2b3c4d5e", "schedule",
+                    CiStatus.CANCELLED, null, ago(30), ago(30), ago(30).plusSeconds(64), null),
+                CiRun("97", 210, "Bernoulli numbers example", "Android CI", "note-g", "0f9e8d7c6b", "push",
+                    CiStatus.SUCCESS, ada, ago(300), ago(300), ago(300).plusSeconds(377), null),
+            )
+        }
         private val ada = User("ada", "Ada Lovelace", null, null)
         private val grace = User("grace", "Grace Hopper", null, null)
 
@@ -360,6 +418,24 @@ private class SampleClient : ForgeClient {
     override suspend fun deleteBranch(repo: Repo, detail: PullDetail) = Unit
 
     override suspend fun addComment(repo: Repo, issue: Issue, body: String) = Comment("3", ada, body, now)
+
+    override val ci = CiFeatures("Pipelines")
+
+    override suspend fun listCiRuns(repo: Repo, page: Int) = Page(runs, null)
+    override suspend fun getCiRun(repo: Repo, id: String) = runs.first { it.id == id }
+    override suspend fun listCiJobs(repo: Repo, run: CiRun) = listOf(
+        CiJob("1", "build", "build", CiStatus.SUCCESS, ago(3), ago(3).plusSeconds(312), null),
+        CiJob("2", "unit tests", "test", CiStatus.FAILURE, ago(3).plusSeconds(320), ago(3).plusSeconds(498), null),
+        CiJob("3", "screenshots", "test", CiStatus.SUCCESS, ago(3).plusSeconds(320), ago(3).plusSeconds(401), null),
+        CiJob("4", "deploy", "deploy", CiStatus.ACTION_REQUIRED, null, null, null),
+    )
+    override suspend fun getCiJobLog(repo: Repo, run: CiRun, job: CiJob) = SAMPLE_LOG
+    override suspend fun listCiArtifacts(repo: Repo, run: CiRun) = listOf(
+        CiArtifact("a1", "app-debug", 28_212_973, false, ago(3), now.plus(87, ChronoUnit.DAYS), "u", "app-debug.zip"),
+        CiArtifact("a2", "test-reports", 412_908, false, ago(3), now.plus(87, ChronoUnit.DAYS), "u", "test-reports.zip"),
+        CiArtifact("a3", "coverage", 1_204_331, true, ago(900), ago(10), "u", "coverage.zip"),
+    )
+    override suspend fun downloadCiArtifact(artifact: CiArtifact, out: java.io.OutputStream, onProgress: (Long, Long?) -> Unit) = 0L
     override suspend fun createIssue(repo: Repo, title: String, body: String) = issues.first()
 }
 
@@ -414,3 +490,31 @@ class Mill(private val store: Store) {
     }
 }
 """.trimIndent()
+
+private val SAMPLE_LOG = """
+    |2026-10-09T14:02:51.0000000Z ##[group]Run actions/checkout@v4
+    |2026-10-09T14:02:51.0000000Z with:
+    |2026-10-09T14:02:51.0000000Z   fetch-depth: 1
+    |2026-10-09T14:02:52.0000000Z ##[endgroup]
+    |2026-10-09T14:02:52.0000000Z ##[group]Run ./gradlew testDebugUnitTest
+    |2026-10-09T14:02:52.0000000Z ##[command]./gradlew testDebugUnitTest
+    |2026-10-09T14:02:52.0000000Z shell: /usr/bin/bash -e {0}
+    |2026-10-09T14:02:53.0000000Z ##[endgroup]
+    |2026-10-09T14:03:10.0000000Z > Task :app:compileDebugKotlin
+    |2026-10-09T14:03:40.0000000Z > Task :app:testDebugUnitTest
+    |2026-10-09T14:03:41.0000000Z
+    |2026-10-09T14:03:41.0000000Z \u001B[32mMillTest > adds two numbers PASSED\u001B[0m
+    |2026-10-09T14:03:41.0000000Z \u001B[32mMillTest > multiplies PASSED\u001B[0m
+    |2026-10-09T14:03:42.0000000Z \u001B[31;1mMillTest > repeats operation cards FAILED\u001B[0m
+    |2026-10-09T14:03:42.0000000Z     java.lang.AssertionError: expected:<3> but was:<1>
+    |2026-10-09T14:03:42.0000000Z         at MillTest.repeats(MillTest.kt:42)
+    |2026-10-09T14:03:42.0000000Z
+    |2026-10-09T14:03:42.0000000Z 3 tests completed, 1 failed
+    |2026-10-09T14:03:43.0000000Z ##[warning]Gradle 9 deprecations were used in this build
+    |2026-10-09T14:03:43.0000000Z \u001B[1mBUILD FAILED\u001B[0m in 51s
+    |2026-10-09T14:03:43.0000000Z ##[error]Process completed with exit code 1.
+    |2026-10-09T14:03:44.0000000Z ##[group]Post job cleanup.
+    |2026-10-09T14:03:44.0000000Z ##[command]/usr/bin/git version
+    |2026-10-09T14:03:44.0000000Z git version 2.51.0
+    |2026-10-09T14:03:44.0000000Z ##[endgroup]
+    |""".trimMargin().replace("\\u001B", "\u001B")

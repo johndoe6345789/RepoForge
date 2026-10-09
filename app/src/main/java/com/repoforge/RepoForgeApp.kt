@@ -10,6 +10,7 @@ import com.repoforge.data.AppSettings
 import android.os.Build
 import android.os.Environment
 import com.repoforge.data.account.AccountStore
+import com.repoforge.data.ci.ArtifactFiles
 import com.repoforge.data.git.CloneStore
 import com.repoforge.data.git.GitService
 import com.repoforge.data.git.JGitAndroid
@@ -38,6 +39,8 @@ class RepoForgeApp : Application(), SingletonImageLoader.Factory {
     val clones: CloneStore by lazy { CloneStore(this).also { it.prune() } }
 
     val git = GitService()
+
+    val artifacts: ArtifactFiles by lazy { ArtifactFiles(this) }
 
     override fun onCreate() {
         super.onCreate()

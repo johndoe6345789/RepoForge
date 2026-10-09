@@ -14,6 +14,10 @@ import com.repoforge.data.model.Account
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.PullDetail
+import com.repoforge.data.model.CiJob
+import com.repoforge.data.model.CiRun
+import com.repoforge.ui.ci.CiLogModel
+import com.repoforge.ui.ci.CiRunModel
 import com.repoforge.data.model.Repo
 import com.repoforge.data.ai.ClaudeConflictResolver
 import com.repoforge.data.git.GitCredentials
@@ -47,6 +51,8 @@ sealed interface Screen {
     class IssueDetail(val model: IssueModel) : Screen
     class NewIssue(val model: NewIssueModel) : Screen
     class Conflicts(val model: ConflictModel, val issue: IssueModel) : Screen
+    class CiRunDetail(val model: CiRunModel) : Screen
+    class CiLog(val model: CiLogModel) : Screen
     data object LocalRepos : Screen
     class LocalRepo(val model: LocalRepoModel) : Screen
 }
@@ -164,6 +170,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun conflictsDone(screen: Screen.Conflicts) {
         stack.remove(screen)
         screen.issue.pull.refresh()
+    }
+
+    fun openCiRun(repoModel: RepoModel, run: CiRun) {
+        stack += Screen.CiRunDetail(CiRunModel(viewModelScope, repoModel.client, repoModel.repo, run, app.artifacts))
+    }
+
+    fun openCiLog(runModel: CiRunModel, job: CiJob) {
+        stack += Screen.CiLog(CiLogModel(viewModelScope, runModel.client, runModel.repo, runModel.run, job, app.cacheDir))
     }
 
     fun cloneRepo(account: Account, repo: Repo) {

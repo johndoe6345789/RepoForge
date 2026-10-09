@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files other apps may open: extracted CI artifacts (including APKs to install) and shared logs. -->
+<paths>
+    <cache-path name="artifacts" path="artifacts/" />
+    <cache-path name="logs" path="logs/" />
+</paths>

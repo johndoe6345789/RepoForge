@@ -2,6 +2,12 @@ package com.repoforge.data.forge
 
 import com.repoforge.data.forge.ForgeClient.Companion.PAGE_SIZE
 import com.repoforge.data.model.Branch
+import com.repoforge.data.model.CiArtifact
+import com.repoforge.data.model.CiFeatures
+import com.repoforge.data.model.CiJob
+import com.repoforge.data.model.CiRun
+import com.repoforge.data.model.CiStatus
+import java.io.OutputStream
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
@@ -308,6 +314,68 @@ class BitbucketClient(client: OkHttpClient, apiBase: String, email: String?, tok
         }
     }
 
+    /** Bitbucket has no public API for pipeline artifacts. */
+    override val ci = CiFeatures("Pipelines", artifacts = false)
+
+    override suspend fun listCiRuns(repo: Repo, page: Int): Page<CiRun> {
+        val json = http.getJson { repoPath(repo); seg("pipelines", ""); q("sort", "-created_on"); q("page", page); q("pagelen", PAGE_SIZE) }
+            .json.asObject()
+        val runs = json.arr("values")?.objects().orEmpty().map { parsePipeline(repo, it) }
+        return Page(runs, if (json.str("next") != null) page + 1 else null)
+    }
+
+    override suspend fun getCiRun(repo: Repo, id: String): CiRun =
+        parsePipeline(repo, http.getJson { repoPath(repo); seg("pipelines", id) }.json.asObject())
+
+    /** Pipeline steps play the part of jobs. */
+    override suspend fun listCiJobs(repo: Repo, run: CiRun): List<CiJob> =
+        collectPages(http.url { repoPath(repo); seg("pipelines", run.id, "steps", "") }).map { step ->
+            val id = step.str("uuid").orEmpty()
+            CiJob(
+                id = id,
+                name = step.str("name") ?: "Step",
+                stage = null,
+                status = ciStatus(step.obj("state")),
+                startedAt = step.instant("started_on"),
+                finishedAt = step.instant("completed_on"),
+                webUrl = run.webUrl?.let { "$it/steps/$id" },
+            )
+        }
+
+    override suspend fun getCiJobLog(repo: Repo, run: CiRun, job: CiJob): String = try {
+        http.getText(http.url { repoPath(repo); seg("pipelines", run.id, "steps", job.id, "log") })
+    } catch (e: ForgeException) {
+        if (e.code == 404) throw ForgeException(404, "This step has no log yet.", e)
+        throw e
+    }
+
+    override suspend fun listCiArtifacts(repo: Repo, run: CiRun): List<CiArtifact> = emptyList()
+
+    override suspend fun downloadCiArtifact(artifact: CiArtifact, out: OutputStream, onProgress: (Long, Long?) -> Unit): Long =
+        throw ForgeException(0, "Bitbucket doesn't offer pipeline artifacts through its API")
+
+    private fun parsePipeline(repo: Repo, json: JsonObject): CiRun {
+        val target = json.obj("target")
+        val number = json.long("build_number")
+        val pullRequest = target?.obj("pullrequest")
+        return CiRun(
+            id = json.str("uuid").orEmpty(),
+            number = number,
+            title = pullRequest?.str("title") ?: target?.str("ref_name") ?: target?.str("source") ?: "Pipeline",
+            // A custom pipeline's name, or which section of bitbucket-pipelines.yml ran.
+            workflow = target?.obj("selector")?.let { it.str("pattern") ?: it.str("type") },
+            branch = target?.str("ref_name") ?: target?.str("source"),
+            sha = target?.obj("commit")?.str("hash"),
+            event = json.obj("trigger")?.str("name")?.lowercase(),
+            status = ciStatus(json.obj("state")),
+            actor = json.obj("creator")?.let(::parseUser),
+            createdAt = json.instant("created_on"),
+            startedAt = json.instant("created_on"),
+            finishedAt = json.instant("completed_on"),
+            webUrl = number?.let { "$WEB/${repo.fullName}/pipelines/results/$it" },
+        )
+    }
+
     private fun UrlSpec.repoPath(repo: Repo) {
         seg("repositories"); path(repo.apiId)
     }
@@ -332,6 +400,21 @@ class BitbucketClient(client: OkHttpClient, apiBase: String, email: String?, tok
         private val CONFLICT_STATUSES = setOf("merge conflict", "local deleted", "remote deleted", "local and remote deleted")
         private const val WEB = "https://bitbucket.org"
         private val CLOSED_ISSUE_STATES = listOf("resolved", "invalid", "duplicate", "wontfix", "closed")
+
+        /** state.name is PENDING / IN_PROGRESS / COMPLETED; the outcome is in state.result or state.stage. */
+        fun ciStatus(state: JsonObject?): CiStatus = when (state?.str("name")) {
+            "PENDING", "PARSING" -> CiStatus.QUEUED
+            "IN_PROGRESS", "RUNNING" -> if (state.obj("stage")?.str("name") == "PAUSED") CiStatus.ACTION_REQUIRED else CiStatus.RUNNING
+            "COMPLETED" -> when (state.obj("result")?.str("name")) {
+                "SUCCESSFUL" -> CiStatus.SUCCESS
+                "FAILED", "ERROR" -> CiStatus.FAILURE
+                "STOPPED" -> CiStatus.CANCELLED
+                "NOT_RUN" -> CiStatus.SKIPPED
+                "EXPIRED" -> CiStatus.NEUTRAL
+                else -> CiStatus.UNKNOWN
+            }
+            else -> CiStatus.UNKNOWN
+        }
 
         fun parseUser(json: JsonObject) = User(
             login = json.str("username") ?: json.str("nickname") ?: json.str("display_name").orEmpty(),

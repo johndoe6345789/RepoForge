@@ -21,6 +21,8 @@ import com.repoforge.ui.repo.RepoScreen
 import com.repoforge.ui.repos.ReposScreen
 import com.repoforge.ui.settings.SettingsScreen
 import com.repoforge.ui.conflicts.ConflictScreen
+import com.repoforge.ui.ci.CiLogScreen
+import com.repoforge.ui.ci.CiRunScreen
 import com.repoforge.ui.local.CloneDialog
 import com.repoforge.ui.local.LocalRepoScreen
 import com.repoforge.ui.local.LocalReposScreen
@@ -79,6 +81,7 @@ fun RepoForgeRoot(vm: AppViewModel) {
                 onOpenIssue = { vm.openIssue(screen.model.account, screen.model.repo, it) },
                 onOpenCommit = { vm.openCommit(screen.model.account, screen.model.repo, it) },
                 onNewIssue = { vm.newIssue(screen.model) },
+                onOpenRun = { vm.openCiRun(screen.model, it) },
                 localClone = vm.localCloneOf(screen.model.account, screen.model.repo, clones),
                 onClone = { vm.cloneRepo(screen.model.account, screen.model.repo) },
                 onOpenLocal = vm::openLocalRepo,
@@ -97,6 +100,8 @@ fun RepoForgeRoot(vm: AppViewModel) {
                 onOpenSettings = vm::openSettings,
                 onDone = { vm.conflictsDone(screen) },
             )
+            is Screen.CiRunDetail -> CiRunScreen(model = screen.model, onBack = { vm.back() }, onOpenJob = { vm.openCiLog(screen.model, it) })
+            is Screen.CiLog -> CiLogScreen(model = screen.model, onBack = { vm.back() })
             Screen.LocalRepos -> LocalReposScreen(clones = clones, onBack = { vm.back() }, onOpen = vm::openLocalRepo)
             is Screen.LocalRepo -> LocalRepoScreen(
                 model = screen.model,

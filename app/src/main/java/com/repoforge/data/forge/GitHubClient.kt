@@ -2,6 +2,12 @@ package com.repoforge.data.forge
 
 import com.repoforge.data.forge.ForgeClient.Companion.PAGE_SIZE
 import com.repoforge.data.model.Branch
+import com.repoforge.data.model.CiArtifact
+import com.repoforge.data.model.CiFeatures
+import com.repoforge.data.model.CiJob
+import com.repoforge.data.model.CiRun
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import java.io.OutputStream
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
@@ -229,6 +235,45 @@ class GitHubClient(client: OkHttpClient, apiBase: String, token: String) : Forge
             if (e.code != 422) throw e // 422: the branch is already gone
         }
     }
+
+    override val ci = CiFeatures("Actions")
+
+    override suspend fun listCiRuns(repo: Repo, page: Int): Page<CiRun> {
+        val result = http.getJson { seg("repos"); path(repo.apiId); seg("actions", "runs"); q("per_page", PAGE_SIZE); q("page", page) }
+        return page(result, page, result.json.asObject().arr("workflow_runs")?.objects().orEmpty().map(GitHubCi::run))
+    }
+
+    override suspend fun getCiRun(repo: Repo, id: String): CiRun =
+        GitHubCi.run(http.getJson { seg("repos"); path(repo.apiId); seg("actions", "runs", id) }.json.asObject())
+
+    override suspend fun listCiJobs(repo: Repo, run: CiRun): List<CiJob> {
+        val jobs = mutableListOf<CiJob>()
+        var page = 1
+        while (page <= MAX_PAGES) {
+            val result = http.getJson {
+                seg("repos"); path(repo.apiId); seg("actions", "runs", run.id, "jobs"); q("per_page", 100); q("page", page)
+            }
+            jobs += result.json.asObject().arr("jobs")?.objects().orEmpty().map(GitHubCi::job)
+            if (!result.hasNextLink) break
+            page++
+        }
+        return jobs
+    }
+
+    override suspend fun getCiJobLog(repo: Repo, run: CiRun, job: CiJob): String = try {
+        http.getText(http.url { seg("repos"); path(repo.apiId); seg("actions", "jobs", job.id, "logs") })
+    } catch (e: ForgeException) {
+        // The log is only published once the job finishes.
+        if (e.code == 404 && !job.status.isFinished) throw ForgeException(404, "The log appears here when the job finishes.", e)
+        throw e
+    }
+
+    override suspend fun listCiArtifacts(repo: Repo, run: CiRun): List<CiArtifact> =
+        http.getJson { seg("repos"); path(repo.apiId); seg("actions", "runs", run.id, "artifacts"); q("per_page", 100) }
+            .json.asObject().arr("artifacts")?.objects().orEmpty().map(GitHubCi::artifact)
+
+    override suspend fun downloadCiArtifact(artifact: CiArtifact, out: OutputStream, onProgress: (Long, Long?) -> Unit): Long =
+        http.download(artifact.downloadUrl.toHttpUrl(), out, onProgress)
 
     private fun <T> page(result: HttpResult, page: Int, items: List<T>) =
         Page(items, if (result.hasNextLink) page + 1 else null)

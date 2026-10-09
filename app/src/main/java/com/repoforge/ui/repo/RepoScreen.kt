@@ -64,6 +64,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.repoforge.R
 import com.repoforge.data.git.LocalClone
+import com.repoforge.data.model.CiRun
+import com.repoforge.ui.ci.CiRunsTab
 import com.repoforge.data.forge.ForgeClient
 import com.repoforge.data.forge.WebLinks
 import com.repoforge.data.model.Commit
@@ -103,6 +105,7 @@ fun RepoScreen(
     onOpenIssue: (Issue) -> Unit,
     onOpenCommit: (Commit) -> Unit,
     onNewIssue: () -> Unit,
+    onOpenRun: (CiRun) -> Unit = {},
     /** This repository's clone on the device, if any. */
     localClone: LocalClone? = null,
     onClone: () -> Unit = {},
@@ -188,6 +191,7 @@ fun RepoScreen(
                                     RepoTab.COMMITS -> "Commits"
                                     RepoTab.ISSUES -> "Issues"
                                     RepoTab.PULLS -> model.account.type.pullRequestName
+                                    RepoTab.CI -> model.client.ci.name
                                 }
                             )
                         },
@@ -215,6 +219,7 @@ fun RepoScreen(
                     emptyMessage = "No ${model.account.type.pullRequestName.lowercase()}",
                     onOpen = onOpenIssue,
                 )
+                RepoTab.CI -> CiRunsTab(model.ciRuns, onOpenRun)
             }
         }
     }

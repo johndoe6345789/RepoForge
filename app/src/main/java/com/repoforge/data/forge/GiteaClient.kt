@@ -2,6 +2,12 @@ package com.repoforge.data.forge
 
 import com.repoforge.data.forge.ForgeClient.Companion.PAGE_SIZE
 import com.repoforge.data.model.Branch
+import com.repoforge.data.model.CiArtifact
+import com.repoforge.data.model.CiFeatures
+import com.repoforge.data.model.CiJob
+import com.repoforge.data.model.CiRun
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import java.io.OutputStream
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
@@ -200,11 +206,90 @@ class GiteaClient(client: OkHttpClient, apiBase: String, token: String) : ForgeC
         }
     }
 
+    override val ci = CiFeatures("Actions")
+
+    /**
+     * Gitea 1.24+ and Forgejo list runs at actions/runs; older servers only have actions/tasks,
+     * where each entry is one job. `page` must be sent, or Forgejo ignores `limit`.
+     */
+    override suspend fun listCiRuns(repo: Repo, page: Int): Page<CiRun> {
+        val result = try {
+            http.getJson { seg("repos"); path(repo.apiId); seg("actions", "runs"); q("page", page); q("limit", PAGE_SIZE) }
+        } catch (e: ForgeException) {
+            if (e.code != 404) throw e
+            return listCiTasks(repo, page)
+        }
+        val json = result.json.asObject()
+        val runs = json.arr("workflow_runs")?.objects().orEmpty().map(GitHubCi::run)
+        return Page(runs, nextPage(result, page, json.long("total_count"), runs.size))
+    }
+
+    private suspend fun listCiTasks(repo: Repo, page: Int): Page<CiRun> {
+        val result = http.getJson { seg("repos"); path(repo.apiId); seg("actions", "tasks"); q("page", page); q("limit", PAGE_SIZE) }
+        val json = result.json.asObject()
+        val tasks = json.arr("workflow_runs")?.objects().orEmpty().map { task ->
+            GitHubCi.run(task).copy(id = TASK_PREFIX + task.long("id"), workflow = task.str("name"))
+        }
+        return Page(tasks, nextPage(result, page, json.long("total_count"), tasks.size))
+    }
+
+    override suspend fun getCiRun(repo: Repo, id: String): CiRun {
+        if (id.startsWith(TASK_PREFIX)) {
+            return listCiTasks(repo, 1).items.firstOrNull { it.id == id } ?: throw ForgeException(404, "This run is no longer listed")
+        }
+        return GitHubCi.run(http.getJson { seg("repos"); path(repo.apiId); seg("actions", "runs", id) }.json.asObject())
+    }
+
+    override suspend fun listCiJobs(repo: Repo, run: CiRun): List<CiJob> {
+        if (run.id.startsWith(TASK_PREFIX)) {
+            // A task is a single job.
+            return listOf(
+                CiJob(run.id.removePrefix(TASK_PREFIX), run.workflow ?: run.title, null, run.status, run.startedAt, run.finishedAt, run.webUrl)
+            )
+        }
+        val json = http.getJson { seg("repos"); path(repo.apiId); seg("actions", "runs", run.id, "jobs"); q("page", 1); q("limit", 100) }.json
+        // Gitea wraps jobs like GitHub; Forgejo returns a bare array.
+        val items = (json as? JsonObject)?.arr("jobs")?.objects() ?: json.objects()
+        return items.map(GitHubCi::job)
+    }
+
+    override suspend fun getCiJobLog(repo: Repo, run: CiRun, job: CiJob): String = try {
+        http.getText(http.url { seg("repos"); path(repo.apiId); seg("actions", "jobs", job.id, "logs") })
+    } catch (e: ForgeException) {
+        // Forgejo has no log endpoint (it answers 404 or 500); point to the web page instead.
+        if (e.code == 404 || e.code == 500) {
+            throw ForgeException(e.code, "This server doesn't offer job logs through its API. Open the job in the browser to read it.", e)
+        }
+        throw e
+    }
+
+    override suspend fun listCiArtifacts(repo: Repo, run: CiRun): List<CiArtifact> {
+        if (run.id.startsWith(TASK_PREFIX)) return emptyList()
+        val json = try {
+            http.getJson { seg("repos"); path(repo.apiId); seg("actions", "runs", run.id, "artifacts"); q("page", 1); q("limit", 100) }.json
+        } catch (e: ForgeException) {
+            if (e.code == 404) return emptyList() // servers without the artifacts API
+            throw e
+        }
+        val items = (json as? JsonObject)?.arr("artifacts")?.objects() ?: json.objects()
+        return items.map(GitHubCi::artifact)
+    }
+
+    override suspend fun downloadCiArtifact(artifact: CiArtifact, out: OutputStream, onProgress: (Long, Long?) -> Unit): Long =
+        http.download(artifact.downloadUrl.toHttpUrl(), out, onProgress)
+
+    private fun nextPage(result: HttpResult, page: Int, total: Long?, count: Int): Int? = when {
+        result.hasNextLink -> page + 1
+        total != null -> if (page.toLong() * PAGE_SIZE < total && count > 0) page + 1 else null
+        else -> if (count >= PAGE_SIZE) page + 1 else null
+    }
+
     private fun <T> page(result: HttpResult, page: Int, items: List<T>) =
         Page(items, if (result.hasNextLink) page + 1 else null)
 
     companion object {
         private const val MAX_PAGES = 10
+        private const val TASK_PREFIX = "task-"
 
         fun parseUser(json: JsonObject) = User(
             login = json.str("login") ?: json.str("username").orEmpty(),

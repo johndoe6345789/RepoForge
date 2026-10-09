@@ -1,6 +1,11 @@
 package com.repoforge.data.forge
 
 import com.repoforge.data.model.Branch
+import com.repoforge.data.model.CiArtifact
+import com.repoforge.data.model.CiFeatures
+import com.repoforge.data.model.CiJob
+import com.repoforge.data.model.CiRun
+import java.io.OutputStream
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
@@ -68,6 +73,25 @@ interface ForgeClient {
 
     /** Deletes the pull request's branch, e.g. after it was merged. */
     suspend fun deleteBranch(repo: Repo, detail: PullDetail)
+
+    /** What this service's CI API supports. */
+    val ci: CiFeatures
+
+    /** CI runs/pipelines, newest first. */
+    suspend fun listCiRuns(repo: Repo, page: Int): Page<CiRun>
+
+    /** Fresh state of one run, for following it while it's in progress. */
+    suspend fun getCiRun(repo: Repo, id: String): CiRun
+
+    suspend fun listCiJobs(repo: Repo, run: CiRun): List<CiJob>
+
+    /** A job's full log as plain text (it may contain ANSI colour codes). */
+    suspend fun getCiJobLog(repo: Repo, run: CiRun, job: CiJob): String
+
+    suspend fun listCiArtifacts(repo: Repo, run: CiRun): List<CiArtifact>
+
+    /** Streams an artifact's archive into [out]; returns the number of bytes written. */
+    suspend fun downloadCiArtifact(artifact: CiArtifact, out: OutputStream, onProgress: (Long, Long?) -> Unit): Long
 
     /** The README at the repository root, or null when there isn't one. */
     suspend fun getReadme(repo: Repo, ref: String): FileBlob? {

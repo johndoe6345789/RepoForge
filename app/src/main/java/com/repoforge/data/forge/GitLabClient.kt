@@ -2,6 +2,14 @@ package com.repoforge.data.forge
 
 import com.repoforge.data.forge.ForgeClient.Companion.PAGE_SIZE
 import com.repoforge.data.model.Branch
+import com.repoforge.data.model.CiArtifact
+import com.repoforge.data.model.CiFeatures
+import com.repoforge.data.model.CiJob
+import com.repoforge.data.model.CiRun
+import com.repoforge.data.model.CiStatus
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import java.io.OutputStream
+import java.time.Instant
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
@@ -223,6 +231,64 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
         return all
     }
 
+    override val ci = CiFeatures("Pipelines")
+
+    override suspend fun listCiRuns(repo: Repo, page: Int): Page<CiRun> {
+        val result = http.getJson { seg("projects", repo.apiId, "pipelines"); q("per_page", PAGE_SIZE); q("page", page) }
+        return page(result, page, result.json.objects().map(::parsePipeline))
+    }
+
+    override suspend fun getCiRun(repo: Repo, id: String): CiRun =
+        parsePipeline(http.getJson { seg("projects", repo.apiId, "pipelines", id) }.json.asObject())
+
+    private suspend fun pipelineJobs(repo: Repo, run: CiRun): List<JsonObject> {
+        val jobs = mutableListOf<JsonObject>()
+        var page = 1
+        while (page <= MAX_PAGES) {
+            val result = http.getJson { seg("projects", repo.apiId, "pipelines", run.id, "jobs"); q("per_page", 100); q("page", page) }
+            jobs += result.json.objects()
+            page = nextPage(result, page) ?: break
+        }
+        // Newest first from the API; oldest first follows the stage order.
+        return jobs.sortedBy { it.long("id") }
+    }
+
+    override suspend fun listCiJobs(repo: Repo, run: CiRun): List<CiJob> = pipelineJobs(repo, run).map { json ->
+        CiJob(
+            id = json.long("id")?.toString().orEmpty(),
+            name = json.str("name") ?: "Job",
+            stage = json.str("stage"),
+            status = ciStatus(json.str("status")),
+            startedAt = json.instant("started_at"),
+            finishedAt = json.instant("finished_at"),
+            webUrl = json.str("web_url"),
+        )
+    }
+
+    override suspend fun getCiJobLog(repo: Repo, run: CiRun, job: CiJob): String =
+        http.getText(http.url { seg("projects", repo.apiId, "jobs", job.id, "trace") })
+
+    /** GitLab keeps artifacts per job: each job with an archive becomes one artifact. */
+    override suspend fun listCiArtifacts(repo: Repo, run: CiRun): List<CiArtifact> = pipelineJobs(repo, run).mapNotNull { json ->
+        val file = json.obj("artifacts_file") ?: return@mapNotNull null
+        val id = json.long("id")?.toString() ?: return@mapNotNull null
+        val name = json.str("name") ?: "job-$id"
+        val expiresAt = json.instant("artifacts_expire_at")
+        CiArtifact(
+            id = id,
+            name = name,
+            sizeBytes = file.long("size"),
+            expired = expiresAt?.isBefore(Instant.now()) == true,
+            createdAt = json.instant("finished_at"),
+            expiresAt = expiresAt,
+            downloadUrl = http.url { seg("projects", repo.apiId, "jobs", id, "artifacts") }.toString(),
+            fileName = "${safeFileName(name)}-artifacts.zip",
+        )
+    }
+
+    override suspend fun downloadCiArtifact(artifact: CiArtifact, out: OutputStream, onProgress: (Long, Long?) -> Unit): Long =
+        http.download(artifact.downloadUrl.toHttpUrl(), out, onProgress)
+
     private fun <T> page(result: HttpResult, page: Int, items: List<T>) = Page(items, nextPage(result, page))
 
     private fun nextPage(result: HttpResult, page: Int): Int? {
@@ -236,6 +302,37 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
 
     companion object {
         private const val MAX_PAGES = 20
+
+        fun ciStatus(status: String?): CiStatus = when (status) {
+            "created", "waiting_for_resource", "preparing", "pending", "scheduled", "waiting_for_callback" -> CiStatus.QUEUED
+            "running" -> CiStatus.RUNNING
+            "success" -> CiStatus.SUCCESS
+            "failed" -> CiStatus.FAILURE
+            "canceled", "canceling" -> CiStatus.CANCELLED
+            "skipped" -> CiStatus.SKIPPED
+            "manual" -> CiStatus.ACTION_REQUIRED
+            else -> CiStatus.UNKNOWN
+        }
+
+        fun parsePipeline(json: JsonObject): CiRun {
+            val iid = json.long("iid")
+            return CiRun(
+                id = json.long("id")?.toString().orEmpty(),
+                number = iid ?: json.long("id"),
+                // Pipelines have no title of their own unless the CI file names them.
+                title = json.str("name")?.takeIf { it.isNotBlank() } ?: json.str("ref") ?: "Pipeline",
+                workflow = null,
+                branch = json.str("ref"),
+                sha = json.str("sha"),
+                event = json.str("source")?.replace('_', ' '),
+                status = ciStatus(json.str("status")),
+                actor = json.obj("user")?.let(::parseUser),
+                createdAt = json.instant("created_at"),
+                startedAt = json.instant("started_at"),
+                finishedAt = json.instant("finished_at") ?: if (ciStatus(json.str("status")).isFinished) json.instant("updated_at") else null,
+                webUrl = json.str("web_url"),
+            )
+        }
 
         fun parseUser(json: JsonObject) = User(
             login = json.str("username").orEmpty(),

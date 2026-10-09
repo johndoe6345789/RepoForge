@@ -41,9 +41,9 @@ object ForgeClients {
     }
 
     fun tokenHelp(type: ForgeType): String = when (type) {
-        ForgeType.GITHUB -> "Create a personal access token (classic) with the repo, read:org and read:user scopes, or a fine-grained token with access to contents, issues and pull requests (read and write to comment, merge and push)."
+        ForgeType.GITHUB -> "Create a personal access token (classic) with the repo, read:org and read:user scopes, or a fine-grained token with access to contents, issues and pull requests (read and write to comment, merge and push) and read access to Actions."
         ForgeType.GITLAB -> "Create a personal access token with the api scope, which also covers cloning and pushing (read_api is enough for browsing only)."
-        ForgeType.BITBUCKET -> "Create an Atlassian API token with Bitbucket scopes (read:user, read:workspace, read:repository, read:pullrequest, read:issue, plus write:issue / write:pullrequest to comment and merge, and write:repository to push and delete branches), then sign in with your Atlassian account e-mail. Leave the e-mail empty to use a workspace or repository access token."
+        ForgeType.BITBUCKET -> "Create an Atlassian API token with Bitbucket scopes (read:user, read:workspace, read:repository, read:pullrequest, read:issue, read:pipeline, plus write:issue / write:pullrequest to comment and merge, and write:repository to push and delete branches), then sign in with your Atlassian account e-mail. Leave the e-mail empty to use a workspace or repository access token."
         ForgeType.GITEA -> "Create an access token under Settings → Applications with read access to repository, issue and user (write access to issue and repository to comment, merge and push)."
     }
 

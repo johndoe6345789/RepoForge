@@ -183,3 +183,72 @@ data class MergeOutcome(
     /** True when the service accepted the merge but finishes it in the background. */
     val pending: Boolean = false,
 )
+
+/** The state of a CI run, job or step, normalised across services. */
+enum class CiStatus {
+    QUEUED, RUNNING, SUCCESS, FAILURE, CANCELLED, SKIPPED, NEUTRAL, ACTION_REQUIRED, UNKNOWN;
+
+    val isFinished: Boolean get() = this != QUEUED && this != RUNNING
+}
+
+/** One run of a workflow (GitHub/Gitea Actions) or pipeline (GitLab, Bitbucket). */
+data class CiRun(
+    val id: String,
+    /** The number people see, e.g. "#13". */
+    val number: Long?,
+    val title: String,
+    /** Workflow name or file, when the service has one. */
+    val workflow: String?,
+    val branch: String?,
+    val sha: String?,
+    /** What started it: push, pull_request, schedule… */
+    val event: String?,
+    val status: CiStatus,
+    val actor: User?,
+    val createdAt: Instant?,
+    val startedAt: Instant?,
+    val finishedAt: Instant?,
+    val webUrl: String?,
+    val attempt: Int? = null,
+)
+
+data class CiStep(
+    val name: String,
+    val status: CiStatus,
+    val number: Int?,
+    val startedAt: Instant?,
+    val finishedAt: Instant?,
+)
+
+data class CiJob(
+    val id: String,
+    val name: String,
+    /** GitLab stage, shown as a heading; null elsewhere. */
+    val stage: String?,
+    val status: CiStatus,
+    val startedAt: Instant?,
+    val finishedAt: Instant?,
+    val webUrl: String?,
+    val steps: List<CiStep> = emptyList(),
+)
+
+data class CiArtifact(
+    val id: String,
+    val name: String,
+    val sizeBytes: Long?,
+    val expired: Boolean,
+    val createdAt: Instant?,
+    val expiresAt: Instant?,
+    /** Authenticated API URL that returns the artifact archive. */
+    val downloadUrl: String,
+    /** File name to save the archive under, e.g. "app-debug.zip". */
+    val fileName: String,
+)
+
+/** What a service's CI API offers, which differs between services and server versions. */
+data class CiFeatures(
+    /** "Actions" or "Pipelines", as the service calls it. */
+    val name: String,
+    val logs: Boolean = true,
+    val artifacts: Boolean = true,
+)
