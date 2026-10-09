@@ -9,6 +9,10 @@ import com.repoforge.data.model.FileBlob
 import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.IssueState
+import com.repoforge.data.model.MergeMethod
+import com.repoforge.data.model.MergeOutcome
+import com.repoforge.data.model.Mergeability
+import com.repoforge.data.model.PullDetail
 import com.repoforge.data.model.Page
 import com.repoforge.data.model.Repo
 import com.repoforge.data.model.StateFilter
@@ -237,6 +241,73 @@ class BitbucketClient(client: OkHttpClient, apiBase: String, email: String?, tok
         return parseIssue(json.asObject())
     }
 
+    override val mergeMethods = listOf(MergeMethod.MERGE, MergeMethod.SQUASH, MergeMethod.FAST_FORWARD)
+
+    override suspend fun getPullRequest(repo: Repo, number: Long): PullDetail {
+        val json = http.getJson { repoPath(repo); seg("pullrequests", number.toString()) }.json.asObject()
+        val pull = parsePullRequest(json)
+        // Bitbucket reports conflicts per file in the diffstat rather than on the pull request.
+        val (mergeability, note) = if (pull.state != IssueState.OPEN) {
+            Mergeability.UNKNOWN to null
+        } else {
+            val stats = collectPages(http.url { repoPath(repo); seg("pullrequests", number.toString(), "diffstat"); q("pagelen", 100) })
+            if (stats.any { it.str("status") in CONFLICT_STATUSES }) {
+                Mergeability.CONFLICTS to null
+            } else {
+                Mergeability.MERGEABLE to "Bitbucket checks merge restrictions (approvals, builds) when you merge"
+            }
+        }
+        val headFull = json.path("source", "repository")?.str("full_name")
+        val baseFull = json.path("destination", "repository")?.str("full_name") ?: repo.fullName
+        return PullDetail(
+            pull = pull,
+            mergeability = mergeability,
+            mergeNote = note,
+            headBranch = pull.sourceBranch.orEmpty(),
+            baseBranch = pull.targetBranch.orEmpty(),
+            headSha = json.path("source", "commit")?.str("hash"),
+            headCloneUrl = headFull?.let { "$WEB/$it.git" },
+            baseCloneUrl = "$WEB/$baseFull.git",
+            headRepoApiId = headFull,
+        )
+    }
+
+    override suspend fun mergePullRequest(
+        repo: Repo,
+        detail: PullDetail,
+        method: MergeMethod,
+        title: String?,
+        message: String?,
+        deleteBranch: Boolean,
+    ): MergeOutcome {
+        val url = http.url { repoPath(repo); seg("pullrequests", detail.pull.number.toString(), "merge") }
+        val commitMessage = listOfNotNull(title?.takeIf { it.isNotBlank() }, message?.takeIf { it.isNotBlank() })
+            .joinToString("\n\n").takeIf { it.isNotEmpty() }
+        val result = http.postJson(url, buildJsonObject {
+            put("type", "pullrequest_merge_parameters")
+            put("merge_strategy", when (method) {
+                MergeMethod.SQUASH -> "squash"
+                MergeMethod.FAST_FORWARD -> "fast_forward"
+                else -> "merge_commit"
+            })
+            put("close_source_branch", deleteBranch)
+            if (commitMessage != null) put("message", commitMessage)
+        })
+        // 202: large merges finish asynchronously.
+        if (result.code == 202) return MergeOutcome(null, branchDeleted = deleteBranch, pending = true)
+        val json = result.json.asObject()
+        return MergeOutcome(json.obj("merge_commit")?.str("hash"), branchDeleted = deleteBranch)
+    }
+
+    override suspend fun deleteBranch(repo: Repo, detail: PullDetail) {
+        val owner = detail.headRepoApiId ?: repo.apiId
+        try {
+            http.delete(http.url { seg("repositories"); path(owner); seg("refs", "branches", detail.headBranch) })
+        } catch (e: ForgeException) {
+            if (e.code != 404) throw e
+        }
+    }
+
     private fun UrlSpec.repoPath(repo: Repo) {
         seg("repositories"); path(repo.apiId)
     }
@@ -258,6 +329,8 @@ class BitbucketClient(client: OkHttpClient, apiBase: String, email: String?, tok
     companion object {
         private const val MAX_PAGES = 20
         private val OPEN_ISSUE_STATES = listOf("new", "open", "on hold")
+        private val CONFLICT_STATUSES = setOf("merge conflict", "local deleted", "remote deleted", "local and remote deleted")
+        private const val WEB = "https://bitbucket.org"
         private val CLOSED_ISSUE_STATES = listOf("resolved", "invalid", "duplicate", "wontfix", "closed")
 
         fun parseUser(json: JsonObject) = User(

@@ -7,7 +7,10 @@ import com.repoforge.data.model.EntryType
 import com.repoforge.data.model.FileBlob
 import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
+import com.repoforge.data.model.MergeMethod
+import com.repoforge.data.model.MergeOutcome
 import com.repoforge.data.model.Page
+import com.repoforge.data.model.PullDetail
 import com.repoforge.data.model.Repo
 import com.repoforge.data.model.StateFilter
 import com.repoforge.data.model.TreeEntry
@@ -46,6 +49,25 @@ interface ForgeClient {
     suspend fun addComment(repo: Repo, issue: Issue, body: String): Comment
 
     suspend fun createIssue(repo: Repo, title: String, body: String): Issue
+
+    /** Merge methods the service offers (a repository may still disallow some). */
+    val mergeMethods: List<MergeMethod>
+
+    /** Fresh state of a pull request, including whether it can be merged. */
+    suspend fun getPullRequest(repo: Repo, number: Long): PullDetail
+
+    /** Merges the pull request, optionally deleting its branch afterwards. */
+    suspend fun mergePullRequest(
+        repo: Repo,
+        detail: PullDetail,
+        method: MergeMethod,
+        title: String?,
+        message: String?,
+        deleteBranch: Boolean,
+    ): MergeOutcome
+
+    /** Deletes the pull request's branch, e.g. after it was merged. */
+    suspend fun deleteBranch(repo: Repo, detail: PullDetail)
 
     /** The README at the repository root, or null when there isn't one. */
     suspend fun getReadme(repo: Repo, ref: String): FileBlob? {

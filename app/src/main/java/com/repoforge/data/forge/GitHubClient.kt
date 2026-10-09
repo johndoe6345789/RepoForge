@@ -10,6 +10,10 @@ import com.repoforge.data.model.FileBlob
 import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.IssueState
+import com.repoforge.data.model.MergeMethod
+import com.repoforge.data.model.MergeOutcome
+import com.repoforge.data.model.Mergeability
+import com.repoforge.data.model.PullDetail
 import com.repoforge.data.model.Page
 import com.repoforge.data.model.Repo
 import com.repoforge.data.model.StateFilter
@@ -180,11 +184,86 @@ class GitHubClient(client: OkHttpClient, apiBase: String, token: String) : Forge
         return parseIssue(json.asObject())
     }
 
+    override val mergeMethods = listOf(MergeMethod.MERGE, MergeMethod.SQUASH, MergeMethod.REBASE)
+
+    override suspend fun getPullRequest(repo: Repo, number: Long): PullDetail {
+        val json = http.getJson { seg("repos"); path(repo.apiId); seg("pulls", number.toString()) }.json.asObject()
+        return parsePullDetail(json)
+    }
+
+    override suspend fun mergePullRequest(
+        repo: Repo,
+        detail: PullDetail,
+        method: MergeMethod,
+        title: String?,
+        message: String?,
+        deleteBranch: Boolean,
+    ): MergeOutcome {
+        val url = http.url { seg("repos"); path(repo.apiId); seg("pulls", detail.pull.number.toString(), "merge") }
+        val json = http.putJson(url, buildJsonObject {
+            put("merge_method", when (method) {
+                MergeMethod.SQUASH -> "squash"
+                MergeMethod.REBASE -> "rebase"
+                else -> "merge"
+            })
+            if (!title.isNullOrBlank()) put("commit_title", title)
+            if (!message.isNullOrBlank()) put("commit_message", message)
+        }).json.asObject()
+        val sha = json.str("sha")
+        if (!deleteBranch) return MergeOutcome(sha, branchDeleted = false)
+        // GitHub merges and deletes in two calls; a failed delete doesn't undo the merge.
+        return try {
+            deleteBranch(repo, detail)
+            MergeOutcome(sha, branchDeleted = true)
+        } catch (e: ForgeException) {
+            MergeOutcome(sha, branchDeleted = false, branchError = e.message)
+        }
+    }
+
+    override suspend fun deleteBranch(repo: Repo, detail: PullDetail) {
+        val owner = detail.headRepoApiId ?: throw ForgeException(404, "The pull request's repository no longer exists")
+        val url = http.url { seg("repos"); path(owner); seg("git", "refs", "heads"); path(detail.headBranch) }
+        try {
+            http.delete(url)
+        } catch (e: ForgeException) {
+            if (e.code != 422) throw e // 422: the branch is already gone
+        }
+    }
+
     private fun <T> page(result: HttpResult, page: Int, items: List<T>) =
         Page(items, if (result.hasNextLink) page + 1 else null)
 
     companion object {
         private const val MAX_PAGES = 10
+
+        fun parsePullDetail(json: JsonObject): PullDetail {
+            val pull = parseIssue(json)
+            val head = json.obj("head")
+            val base = json.obj("base")
+            val state = json.str("mergeable_state")
+            val (mergeability, note) = when {
+                pull.state != IssueState.OPEN -> Mergeability.UNKNOWN to null
+                json["mergeable"] == null || json["mergeable"] is kotlinx.serialization.json.JsonNull ->
+                    Mergeability.CHECKING to "GitHub is checking whether this can be merged"
+                state == "dirty" || json.bool("mergeable") == false -> Mergeability.CONFLICTS to null
+                state == "draft" -> Mergeability.BLOCKED to "Draft pull requests can't be merged"
+                state == "blocked" -> Mergeability.BLOCKED to "Blocked by branch protection: required reviews or checks"
+                state == "behind" -> Mergeability.MERGEABLE to "The branch is behind its base branch"
+                state == "unstable" -> Mergeability.MERGEABLE to "Some checks are failing or still running"
+                else -> Mergeability.MERGEABLE to null
+            }
+            return PullDetail(
+                pull = pull,
+                mergeability = mergeability,
+                mergeNote = note,
+                headBranch = head?.str("ref").orEmpty(),
+                baseBranch = base?.str("ref").orEmpty(),
+                headSha = head?.str("sha"),
+                headCloneUrl = head?.obj("repo")?.str("clone_url"),
+                baseCloneUrl = base?.obj("repo")?.str("clone_url"),
+                headRepoApiId = head?.obj("repo")?.str("full_name"),
+            )
+        }
 
         fun parseUser(json: JsonObject) = User(
             login = json.str("login").orEmpty(),

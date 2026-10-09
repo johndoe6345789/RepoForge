@@ -70,11 +70,17 @@ class Http(
 
     suspend fun getJson(spec: UrlSpec.() -> Unit): HttpResult = get(url(spec))
 
-    suspend fun postJson(url: HttpUrl, body: JsonObject): HttpResult =
+    suspend fun postJson(url: HttpUrl, body: JsonObject): HttpResult = send("POST", url, body)
+
+    suspend fun putJson(url: HttpUrl, body: JsonObject): HttpResult = send("PUT", url, body)
+
+    suspend fun delete(url: HttpUrl): HttpResult = send("DELETE", url, null)
+
+    suspend fun send(method: String, url: HttpUrl, body: JsonObject?): HttpResult =
         execute(
             Request.Builder().url(url)
                 .header("Accept", "application/json")
-                .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .method(method, body?.toString()?.toRequestBody(JSON_MEDIA_TYPE))
         )
 
     private suspend fun execute(builder: Request.Builder): HttpResult = withContext(Dispatchers.IO) {
@@ -97,6 +103,7 @@ class Http(
             401 -> "Authentication failed — check the token"
             403 -> "Access denied — the token may be missing a scope"
             404 -> "Not found"
+            405 -> "Not allowed"
             409 -> "Conflict"
             410 -> "No longer available"
             422 -> "Request rejected"

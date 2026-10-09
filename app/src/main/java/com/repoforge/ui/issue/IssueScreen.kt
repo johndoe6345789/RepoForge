@@ -24,6 +24,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -35,6 +37,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +51,9 @@ import com.repoforge.data.forge.WebLinks
 import com.repoforge.data.model.Account
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Issue
+import com.repoforge.data.model.IssueState
+import com.repoforge.data.model.MergeMethod
+import com.repoforge.data.model.PullDetail
 import com.repoforge.data.model.Repo
 import com.repoforge.ui.common.Avatar
 import com.repoforge.ui.common.DiffSummary
@@ -73,11 +79,60 @@ class IssueModel(
     val account: Account,
     private val client: ForgeClient,
     val repo: Repo,
-    val issue: Issue,
+    initial: Issue,
 ) {
-    val comments = Loadable(scope) { client.listComments(repo, issue) }
+    /** Updated after a merge so the header shows the new state. */
+    var issue by mutableStateOf(initial)
+        private set
+    val comments = Loadable(scope) { client.listComments(repo, initial) }
+    /** Mergeability and branch details, for pull/merge requests. */
+    val pull = Loadable(scope) { client.getPullRequest(repo, initial.number).also { issue = it.pull } }
+    val mergeMethods: List<MergeMethod> get() = client.mergeMethods
+    var busy by mutableStateOf(false)
+        private set
+    /** A one-off message for the snackbar, e.g. "Merged". */
+    var notice by mutableStateOf<String?>(null)
+
+    fun merge(method: MergeMethod, title: String, message: String, deleteBranch: Boolean) {
+        val detail = pull.value ?: return
+        runAction {
+            val outcome = client.mergePullRequest(repo, detail, method, title, message, deleteBranch)
+            issue = issue.copy(state = IssueState.MERGED)
+            notice = when {
+                outcome.pending -> "Merge started; it will finish shortly"
+                outcome.branchError != null -> "Merged, but the branch wasn't deleted: ${outcome.branchError}"
+                outcome.branchDeleted -> "Merged and deleted ${detail.headBranch}"
+                else -> "Merged"
+            }
+            pull.refresh()
+        }
+    }
+
+    fun deleteBranch() {
+        val detail = pull.value ?: return
+        runAction {
+            client.deleteBranch(repo, detail)
+            notice = "Deleted ${detail.headBranch}"
+        }
+    }
+
+    private fun runAction(block: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                notice = e.userMessage()
+            } finally {
+                busy = false
+            }
+        }
+    }
     /** Changed files, for pull/merge requests. */
-    val files = Loadable(scope) { client.getPullRequestDiff(repo, issue) }
+    val files = Loadable(scope) { client.getPullRequestDiff(repo, initial) }
     val expanded = mutableStateMapOf<String, Boolean>()
     var showFiles by mutableStateOf(false)
     /** Comments posted from this screen, shown after the loaded thread. */
@@ -110,15 +165,23 @@ class IssueModel(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun IssueScreen(model: IssueModel, onBack: () -> Unit) {
+fun IssueScreen(model: IssueModel, onBack: () -> Unit, onResolveConflicts: (PullDetail) -> Unit = {}) {
     val issue = model.issue
     val context = LocalContext.current
     val type = model.account.type
     val resolveLink: (String) -> String? = { link -> WebLinks.resolveRelative(link, "")?.let { WebLinks.blob(type, model.repo, model.repo.defaultBranch ?: "main", it) } }
 
     LaunchedEffect(model) { model.comments.ensureLoaded() }
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(model.notice) {
+        model.notice?.let {
+            snackbar.showSnackbar(it, withDismissAction = true)
+            model.notice = null
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
@@ -148,13 +211,13 @@ fun IssueScreen(model: IssueModel, onBack: () -> Unit) {
                     )
                 }
             }
-            if (model.showFiles) FilesTab(model) else ConversationTab(model, resolveLink)
+            if (model.showFiles) FilesTab(model) else ConversationTab(model, resolveLink, onResolveConflicts)
         }
     }
 }
 
 @Composable
-private fun ConversationTab(model: IssueModel, resolveLink: (String) -> String?) {
+private fun ConversationTab(model: IssueModel, resolveLink: (String) -> String?, onResolveConflicts: (PullDetail) -> Unit) {
     val issue = model.issue
     LazyColumn(Modifier.fillMaxSize()) {
         item(key = "header") {
@@ -180,6 +243,9 @@ private fun ConversationTab(model: IssueModel, resolveLink: (String) -> String?)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { issue.labels.forEach { LabelChip(it) } }
                 }
             }
+        }
+        if (issue.isPullRequest) {
+            item(key = "merge") { MergePanel(model, onResolveConflicts) }
         }
         item(key = "body") {
             CommentCard(

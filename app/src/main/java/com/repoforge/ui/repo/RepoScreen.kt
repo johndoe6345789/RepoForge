@@ -63,6 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.repoforge.R
+import com.repoforge.data.git.LocalClone
 import com.repoforge.data.forge.ForgeClient
 import com.repoforge.data.forge.WebLinks
 import com.repoforge.data.model.Commit
@@ -102,6 +103,10 @@ fun RepoScreen(
     onOpenIssue: (Issue) -> Unit,
     onOpenCommit: (Commit) -> Unit,
     onNewIssue: () -> Unit,
+    /** This repository's clone on the device, if any. */
+    localClone: LocalClone? = null,
+    onClone: () -> Unit = {},
+    onOpenLocal: (LocalClone) -> Unit = {},
 ) {
     val repo = model.repo
     val context = LocalContext.current
@@ -122,6 +127,14 @@ fun RepoScreen(
                     }
                 },
                 actions = {
+                    when {
+                        localClone != null -> IconButton(onClick = { onOpenLocal(localClone) }) {
+                            Icon(painterResource(R.drawable.ic_phone), "Open on this device")
+                        }
+                        repo.cloneHttps != null -> IconButton(onClick = onClone) {
+                            Icon(painterResource(R.drawable.ic_download), "Clone to device")
+                        }
+                    }
                     repo.webUrl?.let { url ->
                         IconButton(onClick = { openUrl(context, url) }) {
                             Icon(painterResource(R.drawable.ic_open_in_browser), "Open in browser")

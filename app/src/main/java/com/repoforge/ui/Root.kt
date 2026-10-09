@@ -20,11 +20,16 @@ import com.repoforge.ui.repo.FileScreen
 import com.repoforge.ui.repo.RepoScreen
 import com.repoforge.ui.repos.ReposScreen
 import com.repoforge.ui.settings.SettingsScreen
+import com.repoforge.ui.conflicts.ConflictScreen
+import com.repoforge.ui.local.CloneDialog
+import com.repoforge.ui.local.LocalRepoScreen
+import com.repoforge.ui.local.LocalReposScreen
 
 @Composable
 fun RepoForgeRoot(vm: AppViewModel) {
     val accounts by vm.accounts.collectAsState()
     val activeId by vm.activeId.collectAsState()
+    val clones by vm.clones.collectAsState()
     // Slide forward when the stack grows and backward when it shrinks; a plain holder because
     // this only records the previous depth and must not trigger recomposition.
     val lastDepth = remember { intArrayOf(vm.stack.size) }
@@ -65,6 +70,7 @@ fun RepoForgeRoot(vm: AppViewModel) {
                 onManageAccounts = vm::manageAccounts,
                 onAddAccount = vm::addAccount,
                 onOpenSettings = vm::openSettings,
+                onOpenLocal = vm::openLocalRepos,
             )
             is Screen.RepoHome -> RepoScreen(
                 model = screen.model,
@@ -73,11 +79,35 @@ fun RepoForgeRoot(vm: AppViewModel) {
                 onOpenIssue = { vm.openIssue(screen.model.account, screen.model.repo, it) },
                 onOpenCommit = { vm.openCommit(screen.model.account, screen.model.repo, it) },
                 onNewIssue = { vm.newIssue(screen.model) },
+                localClone = vm.localCloneOf(screen.model.account, screen.model.repo, clones),
+                onClone = { vm.cloneRepo(screen.model.account, screen.model.repo) },
+                onOpenLocal = vm::openLocalRepo,
             )
             is Screen.File -> FileScreen(model = screen.model, onBack = { vm.back() })
             is Screen.CommitDetail -> CommitScreen(model = screen.model, onBack = { vm.back() })
-            is Screen.IssueDetail -> IssueScreen(model = screen.model, onBack = { vm.back() })
+            is Screen.IssueDetail -> IssueScreen(
+                model = screen.model,
+                onBack = { vm.back() },
+                onResolveConflicts = { vm.openConflicts(screen.model, it) },
+            )
             is Screen.NewIssue -> NewIssueScreen(model = screen.model, onBack = { vm.back() })
+            is Screen.Conflicts -> ConflictScreen(
+                model = screen.model,
+                onBack = { vm.back() },
+                onOpenSettings = vm::openSettings,
+                onDone = { vm.conflictsDone(screen) },
+            )
+            Screen.LocalRepos -> LocalReposScreen(clones = clones, onBack = { vm.back() }, onOpen = vm::openLocalRepo)
+            is Screen.LocalRepo -> LocalRepoScreen(
+                model = screen.model,
+                onBack = { vm.back() },
+                onOpenFile = { vm.openLocalFile(screen.model.clone, it) },
+                onDelete = { vm.deleteClone(screen.model.clone) },
+            )
         }
+    }
+
+    vm.cloneTask?.let { task ->
+        CloneDialog(task, onDismiss = vm::dismissClone, onOpen = vm::openLocalRepo)
     }
 }

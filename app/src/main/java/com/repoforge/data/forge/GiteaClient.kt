@@ -8,11 +8,16 @@ import com.repoforge.data.model.EntryType
 import com.repoforge.data.model.FileBlob
 import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
+import com.repoforge.data.model.MergeMethod
+import com.repoforge.data.model.MergeOutcome
+import com.repoforge.data.model.Mergeability
+import com.repoforge.data.model.PullDetail
 import com.repoforge.data.model.Page
 import com.repoforge.data.model.Repo
 import com.repoforge.data.model.StateFilter
 import com.repoforge.data.model.TreeEntry
 import com.repoforge.data.model.User
+import com.repoforge.data.net.ForgeException
 import com.repoforge.data.net.Http
 import com.repoforge.data.net.HttpResult
 import com.repoforge.data.net.arr
@@ -153,6 +158,46 @@ class GiteaClient(client: OkHttpClient, apiBase: String, token: String) : ForgeC
         val url = http.url { seg("repos"); path(repo.apiId); seg("issues") }
         val json = http.postJson(url, buildJsonObject { put("title", title); put("body", body) }).json
         return GitHubClient.parseIssue(json.asObject()).copy(isPullRequest = false)
+    }
+
+    override val mergeMethods = listOf(MergeMethod.MERGE, MergeMethod.SQUASH, MergeMethod.REBASE, MergeMethod.FAST_FORWARD)
+
+    override suspend fun getPullRequest(repo: Repo, number: Long): PullDetail {
+        val json = http.getJson { seg("repos"); path(repo.apiId); seg("pulls", number.toString()) }.json.asObject()
+        val detail = GitHubClient.parsePullDetail(json)
+        return detail.copy(pull = detail.pull.copy(isPullRequest = true))
+    }
+
+    override suspend fun mergePullRequest(
+        repo: Repo,
+        detail: PullDetail,
+        method: MergeMethod,
+        title: String?,
+        message: String?,
+        deleteBranch: Boolean,
+    ): MergeOutcome {
+        val url = http.url { seg("repos"); path(repo.apiId); seg("pulls", detail.pull.number.toString(), "merge") }
+        http.postJson(url, buildJsonObject {
+            put("Do", when (method) {
+                MergeMethod.SQUASH -> "squash"
+                MergeMethod.REBASE -> "rebase"
+                MergeMethod.FAST_FORWARD -> "fast-forward-only"
+                MergeMethod.MERGE -> "merge"
+            })
+            if (!title.isNullOrBlank()) put("MergeTitleField", title)
+            if (!message.isNullOrBlank()) put("MergeMessageField", message)
+            put("delete_branch_after_merge", deleteBranch)
+        })
+        return MergeOutcome(sha = null, branchDeleted = deleteBranch)
+    }
+
+    override suspend fun deleteBranch(repo: Repo, detail: PullDetail) {
+        val owner = detail.headRepoApiId ?: repo.apiId
+        try {
+            http.delete(http.url { seg("repos"); path(owner); seg("branches"); path(detail.headBranch) })
+        } catch (e: ForgeException) {
+            if (e.code != 404) throw e
+        }
     }
 
     private fun <T> page(result: HttpResult, page: Int, items: List<T>) =

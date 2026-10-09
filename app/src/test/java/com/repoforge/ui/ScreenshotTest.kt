@@ -15,7 +15,11 @@ import com.repoforge.data.model.FileBlob
 import com.repoforge.data.model.ForgeType
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.IssueState
+import com.repoforge.data.model.MergeMethod
+import com.repoforge.data.model.MergeOutcome
+import com.repoforge.data.model.Mergeability
 import com.repoforge.data.model.Page
+import com.repoforge.data.model.PullDetail
 import com.repoforge.data.model.Repo
 import com.repoforge.data.model.StateFilter
 import com.repoforge.data.model.TreeEntry
@@ -41,6 +45,28 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import okhttp3.OkHttpClient
 import org.junit.Rule
+import org.junit.rules.TemporaryFolder
+import com.repoforge.data.ai.AiResolution
+import com.repoforge.data.ai.ConflictAi
+import com.repoforge.data.git.ConflictMarkers
+import com.repoforge.data.git.GitService
+import com.repoforge.data.git.JGitAndroid
+import com.repoforge.data.git.LocalClone
+import com.repoforge.data.git.MergeTarget
+import com.repoforge.data.git.MergeWorkspace
+import com.repoforge.ui.conflicts.ConflictModel
+import com.repoforge.ui.conflicts.ConflictScreen
+import com.repoforge.ui.conflicts.Phase
+import com.repoforge.ui.conflicts.Resolution
+import com.repoforge.ui.local.LocalRepoModel
+import com.repoforge.ui.local.LocalRepoScreen
+import com.repoforge.ui.local.LocalReposScreen
+import com.repoforge.ui.local.LocalTab
+import kotlinx.coroutines.runBlocking
+import org.eclipse.jgit.api.Git
+import org.eclipse.jgit.lib.PersonIdent
+import org.eclipse.jgit.transport.URIish
+import java.io.File
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -66,10 +92,16 @@ class ScreenshotTest {
     private val client = SampleClient()
     private val repo = SampleClient.repo
 
-    private fun shoot(name: String, dark: Boolean = false, content: @Composable () -> Unit) {
+    @get:Rule
+    val tmp = TemporaryFolder()
+
+    private fun shoot(name: String, dark: Boolean = false, ready: () -> Boolean = { true }, content: @Composable () -> Unit) {
         compose.setContent { RepoForgeTheme(dark = dark, dynamicColor = false) { content() } }
         compose.waitForIdle()
         Thread.sleep(1500) // markdown parsing and highlighting run off the main thread
+        // Git work runs on the IO dispatcher; wait for it rather than guessing.
+        val deadline = System.currentTimeMillis() + 20_000
+        while (!ready() && System.currentTimeMillis() < deadline) Thread.sleep(100)
         compose.waitForIdle()
         compose.onRoot().captureRoboImage("screenshots/$name.png")
     }
@@ -126,14 +158,119 @@ class ScreenshotTest {
     }
 
     @Test
-    fun file() = shoot("09-file") { FileScreen(FileModel(scope, account, client, repo, "main", "src/Mill.kt"), {}) }
+    fun file() = shoot("09-file") { FileScreen(FileModel.remote(scope, account, client, repo, "main", "src/Mill.kt"), {}) }
 
     @Test
-    fun fileDark() = shoot("09-file-dark", dark = true) { FileScreen(FileModel(scope, account, client, repo, "main", "src/Mill.kt"), {}) }
+    fun fileDark() = shoot("09-file-dark", dark = true) { FileScreen(FileModel.remote(scope, account, client, repo, "main", "src/Mill.kt"), {}) }
 
     @Test
     fun settings() = shoot("10-settings") { SettingsScreen(AppSettings(RuntimeEnvironment.getApplication()), {}, {}) }
+
+    private val author = PersonIdent("Ada Lovelace", "ada@example.com")
+
+    /** A bare "server" where main and feature/loops both changed Mill.kt and README.md. */
+    private fun conflictingServer(): String {
+        JGitAndroid.install(tmp.newFolder("gitconfig"))
+        val bare = tmp.newFolder("server.git")
+        Git.init().setBare(true).setDirectory(bare).setInitialBranch("main").call().close()
+        val url = bare.toURI().toString()
+        Git.init().setDirectory(tmp.newFolder("seed")).setInitialBranch("main").call().use { g ->
+            g.write("src/Mill.kt", MILL_BASE)
+            g.write("README.md", "# Analytical Engine\n\nThe engine has a mill and a store.\n")
+            g.commit().setMessage("Initial").setAuthor(author).setCommitter(author).call()
+            g.remoteAdd().setName("origin").setUri(URIish(url)).call()
+            g.push().setRemote("origin").add("main").call()
+            g.checkout().setCreateBranch(true).setName("feature/loops").call()
+            g.write("src/Mill.kt", MILL_BASE.replace("fun run(cards: List<OperationCard>) {", "fun run(cards: List<OperationCard>, repeat: Int = 1) {"))
+            g.write("README.md", "# Analytical Engine\n\nThe engine has a mill, a store and loops.\n")
+            g.commit().setMessage("Loops").setAuthor(author).setCommitter(author).call()
+            g.push().setRemote("origin").add("feature/loops").call()
+            g.checkout().setName("main").call()
+            g.write("src/Mill.kt", MILL_BASE.replace("fun run(cards: List<OperationCard>) {", "fun run(cards: List<OperationCard>, trace: Boolean = false) {"))
+            g.write("README.md", "# Analytical Engine\n\nThe engine has a mill and a store of 1,000 numbers.\n")
+            g.commit().setMessage("Tracing").setAuthor(author).setCommitter(author).call()
+            g.push().setRemote("origin").add("main").call()
+        }
+        return url
+    }
+
+    private fun Git.write(path: String, text: String) {
+        File(repository.workTree, path).apply { parentFile!!.mkdirs(); writeText(text) }
+        add().addFilepattern(path).call()
+    }
+
+    private fun conflictModel(): ConflictModel {
+        val url = conflictingServer()
+        val detail = runBlocking { client.getPullRequest(repo, 7) }.copy(headCloneUrl = url, baseCloneUrl = url)
+        val workspace = MergeWorkspace(File(tmp.root, "workspace"), MergeTarget(url, "main", "feature/loops", url), null)
+        val ai = ConflictAi { file, segments, _ ->
+            val hunks = ConflictMarkers.hunks(segments).map {
+                if (file.path.endsWith(".kt")) "    fun run(cards: List<OperationCard>, repeat: Int = 1, trace: Boolean = false) {\n"
+                else "The engine has a mill, a store of 1,000 numbers and loops.\n"
+            }
+            AiResolution(hunks, "Both branches added a parameter to run(); kept both with their defaults so existing callers still compile.")
+        }
+        return ConflictModel(scope, detail, workspace, ai, author)
+    }
+
+    @Test
+    fun conflicts() {
+        val model = conflictModel()
+        var asked = false
+        shoot("11-resolve-conflicts", ready = {
+            if (model.phase == Phase.CONFLICTS && !asked) {
+                asked = true
+                model.files.firstOrNull { it.file.path.endsWith(".kt") }?.let(model::resolveWithAi)
+            }
+            model.phase == Phase.CONFLICTS && model.files.any { it.resolution is Resolution.Text }
+        }) { ConflictScreen(model, {}, {}, {}) }
+    }
+
+    @Test
+    fun conflictsDark() {
+        val model = conflictModel()
+        shoot("11-resolve-conflicts-dark", dark = true, ready = { model.phase == Phase.CONFLICTS }) { ConflictScreen(model, {}, {}, {}) }
+    }
+
+    private fun localModel(): LocalRepoModel {
+        val url = conflictingServer()
+        val dir = File(tmp.root, "clone")
+        runBlocking { GitService().clone(url, dir, "feature/loops", null) {} }
+        File(dir, "README.md").appendText("\nLoops repeat a run of cards.\n")
+        File(dir, "src/Loop.kt").writeText("class Loop(val times: Int)\n")
+        val clone = LocalClone("c1", account.id, repo.fullName, repo.name, dir.path, url, null, System.currentTimeMillis() - 3_600_000)
+        return LocalRepoModel(scope, clone, GitService(), { null }, { author }).apply { status.refresh() }
+    }
+
+    @Test
+    fun localRepo() {
+        val model = localModel()
+        shoot("12-on-device", ready = { model.status.value != null }) { LocalRepoScreen(model, {}, {}, {}) }
+    }
+
+    @Test
+    fun localFiles() {
+        val model = localModel().apply { tab = LocalTab.FILES; open("src") }
+        shoot("13-on-device-files", ready = { model.status.value != null }) { LocalRepoScreen(model, {}, {}, {}) }
+    }
+
+    @Test
+    fun localRepos() {
+        val clones = listOf(
+            LocalClone("1", "id", "ada/analytical-engine", "analytical-engine", "/storage/emulated/0/Documents/RepoForge/analytical-engine", "", null, System.currentTimeMillis() - 7_200_000),
+            LocalClone("2", "id", "ada/note-g", "note-g", "/storage/emulated/0/Android/data/com.repoforge/files/repos/note-g", "", null, System.currentTimeMillis() - 86_400_000 * 3),
+        )
+        shoot("14-on-this-device") { LocalReposScreen(clones, {}, {}) }
+    }
 }
+
+private val MILL_BASE = """
+    |class Mill(private val store: Store) {
+    |    fun run(cards: List<OperationCard>) {
+    |        cards.forEachIndexed { index, card -> execute(card, index) }
+    |    }
+    |}
+    |""".trimMargin()
 
 private class SampleClient : ForgeClient {
     companion object {
@@ -201,6 +338,26 @@ private class SampleClient : ForgeClient {
         Comment("1", grace, "Could the loop counter live in the store?", ago(30)),
         Comment("2", ada, "Yes, a *variable card* can hold it.", ago(10)),
     )
+
+    override val mergeMethods = listOf(MergeMethod.MERGE, MergeMethod.SQUASH)
+
+    override suspend fun getPullRequest(repo: Repo, number: Long) = PullDetail(
+        pull = issues.first { it.number == number },
+        mergeability = if (number == 7L) Mergeability.CONFLICTS else Mergeability.MERGEABLE,
+        mergeNote = null,
+        headBranch = "feature/loops",
+        baseBranch = "main",
+        headSha = "3f2a9c1d7e",
+        headCloneUrl = repo.cloneHttps,
+        baseCloneUrl = repo.cloneHttps,
+        headRepoApiId = repo.apiId,
+    )
+
+    override suspend fun mergePullRequest(
+        repo: Repo, detail: PullDetail, method: MergeMethod, title: String?, message: String?, deleteBranch: Boolean,
+    ) = MergeOutcome("abc", deleteBranch)
+
+    override suspend fun deleteBranch(repo: Repo, detail: PullDetail) = Unit
 
     override suspend fun addComment(repo: Repo, issue: Issue, body: String) = Comment("3", ada, body, now)
     override suspend fun createIssue(repo: Repo, title: String, body: String) = issues.first()

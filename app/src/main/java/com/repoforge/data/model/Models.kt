@@ -147,3 +147,39 @@ data class FileDiff(
     val deletions: Int,
     val patch: String?,
 )
+
+enum class MergeMethod(val label: String, val description: String) {
+    MERGE("Merge commit", "All commits are added to the base branch via a merge commit"),
+    SQUASH("Squash and merge", "The commits are combined into one commit on the base branch"),
+    REBASE("Rebase and merge", "The commits are replayed onto the base branch"),
+    FAST_FORWARD("Fast-forward", "The base branch is moved to the pull request's last commit"),
+}
+
+enum class Mergeability { MERGEABLE, CONFLICTS, BLOCKED, CHECKING, UNKNOWN }
+
+/** What it takes to merge a pull request, and where its branches live. */
+data class PullDetail(
+    val pull: Issue,
+    val mergeability: Mergeability,
+    /** Why the pull request can't be merged yet, or a caveat, in the service's terms. */
+    val mergeNote: String?,
+    val headBranch: String,
+    val baseBranch: String,
+    val headSha: String?,
+    /** Clone URL of the repository holding the pull request branch; null when a fork was deleted. */
+    val headCloneUrl: String?,
+    val baseCloneUrl: String?,
+    /** API id of the repository holding the pull request branch, for deleting it. */
+    val headRepoApiId: String?,
+) {
+    val isFork: Boolean get() = headCloneUrl != null && baseCloneUrl != null && headCloneUrl != baseCloneUrl
+}
+
+data class MergeOutcome(
+    val sha: String?,
+    val branchDeleted: Boolean,
+    /** Set when the merge succeeded but deleting the branch didn't. */
+    val branchError: String? = null,
+    /** True when the service accepted the merge but finishes it in the background. */
+    val pending: Boolean = false,
+)

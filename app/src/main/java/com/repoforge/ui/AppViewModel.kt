@@ -1,7 +1,10 @@
 package com.repoforge.ui
 
 import android.app.Application
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.repoforge.RepoForgeApp
@@ -10,7 +13,20 @@ import com.repoforge.data.forge.ForgeClients
 import com.repoforge.data.model.Account
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.Issue
+import com.repoforge.data.model.PullDetail
 import com.repoforge.data.model.Repo
+import com.repoforge.data.ai.ClaudeConflictResolver
+import com.repoforge.data.git.GitCredentials
+import com.repoforge.data.git.LocalClone
+import com.repoforge.data.git.MergeTarget
+import com.repoforge.data.git.MergeWorkspace
+import com.repoforge.ui.conflicts.ConflictModel
+import com.repoforge.ui.local.CloneTask
+import com.repoforge.ui.local.LocalRepoModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import com.repoforge.ui.accounts.AddAccountModel
 import com.repoforge.ui.issue.IssueModel
 import com.repoforge.ui.issue.NewIssueModel
@@ -30,6 +46,9 @@ sealed interface Screen {
     class CommitDetail(val model: CommitModel) : Screen
     class IssueDetail(val model: IssueModel) : Screen
     class NewIssue(val model: NewIssueModel) : Screen
+    class Conflicts(val model: ConflictModel, val issue: IssueModel) : Screen
+    data object LocalRepos : Screen
+    class LocalRepo(val model: LocalRepoModel) : Screen
 }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -39,6 +58,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val settings = app.settings
     val accounts = store.accounts
     val activeId = store.activeId
+    val clones = app.clones.clones
+
+    /** The clone in progress or just finished, shown as a dialog over every screen. */
+    var cloneTask by mutableStateOf<CloneTask?>(null)
+        private set
 
     val stack = mutableStateListOf<Screen>()
     private val clients = mutableMapOf<Account, ForgeClient>()
@@ -100,7 +124,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openFile(account: Account, repo: Repo, ref: String, path: String) {
-        stack += Screen.File(FileModel(viewModelScope, account, clientFor(account), repo, ref, path))
+        stack += Screen.File(FileModel.remote(viewModelScope, account, clientFor(account), repo, ref, path))
     }
 
     fun openCommit(account: Account, repo: Repo, commit: Commit) {
@@ -119,5 +143,78 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             openIssue(repoModel.account, repoModel.repo, created)
         }
         stack += Screen.NewIssue(model)
+    }
+
+    fun openConflicts(issue: IssueModel, detail: PullDetail) {
+        val account = issue.account
+        val baseUrl = detail.baseCloneUrl ?: issue.repo.cloneHttps ?: return
+        // One workspace per repository, reused (and reset) for each pull request.
+        val dir = File(app.mergeWorkspaceRoot(), safeName("${account.id}-${issue.repo.fullName}"))
+        val workspace = MergeWorkspace(
+            dir,
+            MergeTarget(baseUrl, detail.baseBranch, detail.headBranch, detail.headCloneUrl),
+            GitCredentials.forAccount(account),
+        )
+        val ai = settings.aiKey()?.let { ClaudeConflictResolver(it, settings.aiModel.value) }
+        val model = ConflictModel(viewModelScope, detail, workspace, ai, settings.authorFor(account))
+        stack += Screen.Conflicts(model, issue)
+    }
+
+    /** After pushing the resolved merge: back to the pull request, which re-checks mergeability. */
+    fun conflictsDone(screen: Screen.Conflicts) {
+        stack.remove(screen)
+        screen.issue.pull.refresh()
+    }
+
+    fun cloneRepo(account: Account, repo: Repo) {
+        if (cloneTask?.running == true) return
+        val dir = freeDir(app.cloneRoot(), safeName(repo.name))
+        cloneTask = CloneTask(viewModelScope, app.git, account, repo, dir, GitCredentials.forAccount(account)) { app.clones.add(it) }
+    }
+
+    fun dismissClone() {
+        cloneTask = null
+    }
+
+    fun openLocalRepos() {
+        app.clones.prune()
+        stack += Screen.LocalRepos
+    }
+
+    fun openLocalRepo(clone: LocalClone) {
+        cloneTask = null
+        val model = LocalRepoModel(
+            viewModelScope,
+            clone,
+            app.git,
+            credentials = { store.accounts.value.find { it.id == clone.accountId }?.let(GitCredentials::forAccount) },
+            author = { settings.authorFor(store.accounts.value.find { it.id == clone.accountId }) },
+        )
+        stack += Screen.LocalRepo(model)
+    }
+
+    fun openLocalFile(clone: LocalClone, path: String) {
+        stack += Screen.File(FileModel.local(viewModelScope, clone.dir, clone.name, path))
+    }
+
+    fun deleteClone(clone: LocalClone) {
+        app.clones.remove(clone.id)
+        stack.removeAll { it is Screen.LocalRepo && it.model.clone.id == clone.id }
+        viewModelScope.launch { withContext(Dispatchers.IO) { clone.dir.deleteRecursively() } }
+    }
+
+    /** The local clone of [repo] for [account], if there is one. */
+    fun localCloneOf(account: Account, repo: Repo, clones: List<LocalClone>): LocalClone? =
+        clones.find { it.accountId == account.id && it.fullName == repo.fullName }
+
+    private companion object {
+        fun safeName(name: String): String = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80).ifEmpty { "repo" }
+
+        fun freeDir(root: File, name: String): File {
+            var dir = File(root, name)
+            var n = 2
+            while (dir.exists()) dir = File(root, "$name-${n++}")
+            return dir
+        }
     }
 }
