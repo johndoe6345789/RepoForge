@@ -6,6 +6,7 @@ import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
+import com.repoforge.data.AppSettings
 import com.repoforge.data.account.AccountStore
 import okhttp3.Cache
 import okhttp3.OkHttpClient
@@ -26,6 +27,8 @@ class RepoForgeApp : Application(), SingletonImageLoader.Factory {
     }
 
     val accountStore: AccountStore by lazy { AccountStore(this) }
+
+    val settings: AppSettings by lazy { AppSettings(this) }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)

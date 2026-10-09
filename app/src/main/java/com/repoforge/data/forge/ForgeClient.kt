@@ -5,6 +5,7 @@ import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
 import com.repoforge.data.model.FileBlob
+import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.Page
 import com.repoforge.data.model.Repo
@@ -29,6 +30,12 @@ interface ForgeClient {
     suspend fun getFile(repo: Repo, ref: String, path: String): FileBlob
 
     suspend fun listCommits(repo: Repo, ref: String, page: Int): Page<Commit>
+
+    /** Files changed by one commit, compared with its first parent. */
+    suspend fun getCommitDiff(repo: Repo, sha: String): List<FileDiff>
+
+    /** Files changed by a pull/merge request. */
+    suspend fun getPullRequestDiff(repo: Repo, pull: Issue): List<FileDiff>
 
     suspend fun listIssues(repo: Repo, state: StateFilter, page: Int): Page<Issue>
 

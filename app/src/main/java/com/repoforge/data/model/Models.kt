@@ -62,6 +62,7 @@ data class Repo(
     val cloneHttps: String?,
     val cloneSsh: String?,
     val ownerAvatarUrl: String?,
+    val isArchived: Boolean = false,
 )
 
 enum class EntryType { DIR, FILE, SYMLINK, SUBMODULE }
@@ -134,3 +135,15 @@ data class Comment(
 )
 
 data class Page<T>(val items: List<T>, val nextPage: Int?)
+
+enum class ChangeType { ADDED, MODIFIED, DELETED, RENAMED }
+
+/** One file's changes in a commit or pull request. [patch] is unified-diff hunks, or null for binary/too-large files. */
+data class FileDiff(
+    val path: String,
+    val oldPath: String?,
+    val change: ChangeType,
+    val additions: Int,
+    val deletions: Int,
+    val patch: String?,
+)

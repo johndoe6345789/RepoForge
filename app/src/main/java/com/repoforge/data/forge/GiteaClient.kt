@@ -6,6 +6,7 @@ import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
 import com.repoforge.data.model.FileBlob
+import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.Page
 import com.repoforge.data.model.Repo
@@ -109,6 +110,16 @@ class GiteaClient(client: OkHttpClient, apiBase: String, token: String) : ForgeC
         return page(result, page, commits)
     }
 
+    override suspend fun getCommitDiff(repo: Repo, sha: String): List<FileDiff> {
+        val url = http.url { seg("repos"); path(repo.apiId); seg("git", "commits", "$sha.diff") }
+        return Diffs.parseGitDiff(http.get(url, accept = "text/plain").text)
+    }
+
+    override suspend fun getPullRequestDiff(repo: Repo, pull: Issue): List<FileDiff> {
+        val url = http.url { seg("repos"); path(repo.apiId); seg("pulls", "${pull.number}.diff") }
+        return Diffs.parseGitDiff(http.get(url, accept = "text/plain").text)
+    }
+
     override suspend fun listIssues(repo: Repo, state: StateFilter, page: Int): Page<Issue> {
         val result = http.getJson {
             seg("repos"); path(repo.apiId); seg("issues"); q("type", "issues")
@@ -176,6 +187,7 @@ class GiteaClient(client: OkHttpClient, apiBase: String, token: String) : ForgeC
                 cloneHttps = json.str("clone_url"),
                 cloneSsh = json.str("ssh_url"),
                 ownerAvatarUrl = owner?.str("avatar_url"),
+                isArchived = json.bool("archived") == true,
             )
         }
     }

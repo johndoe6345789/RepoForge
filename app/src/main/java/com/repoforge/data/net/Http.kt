@@ -15,7 +15,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
 /** An HTTP error from a forge API, with a message fit to show the user. */
-class ForgeException(val code: Int, message: String, cause: Throwable? = null) : IOException(message, cause)
+class ForgeException(val code: Int, message: String, cause: Throwable? = null) : IOException(message, cause) {
+    companion object {
+        /** Prefix of messages for failures before any HTTP response (offline, DNS, TLS). */
+        const val NETWORK_PREFIX = "Network error"
+    }
+}
 
 class HttpResult(val code: Int, val headers: Headers, val bytes: ByteArray) {
     val text: String get() = bytes.toString(Charsets.UTF_8)
@@ -77,7 +82,7 @@ class Http(
         val response = try {
             client.newCall(request).execute()
         } catch (e: IOException) {
-            throw ForgeException(0, "Network error: ${e.message ?: e.javaClass.simpleName}", e)
+            throw ForgeException(0, "${ForgeException.NETWORK_PREFIX}: ${e.message ?: e.javaClass.simpleName}", e)
         }
         response.use {
             val bytes = it.body.bytes()

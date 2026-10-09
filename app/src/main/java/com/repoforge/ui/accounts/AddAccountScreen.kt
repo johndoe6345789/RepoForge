@@ -1,6 +1,14 @@
 package com.repoforge.ui.accounts
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,12 +20,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -33,17 +42,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.repoforge.R
 import com.repoforge.data.account.AccountStore
 import com.repoforge.data.forge.ForgeClients
 import com.repoforge.data.model.Account
 import com.repoforge.data.model.ForgeType
+import com.repoforge.data.model.hostLabel
+import com.repoforge.ui.common.brandColor
 import com.repoforge.ui.common.PrimaryAction
 import com.repoforge.ui.common.openUrl
 import com.repoforge.ui.common.userMessage
@@ -120,14 +139,16 @@ fun AddAccountScreen(model: AddAccountModel, firstRun: Boolean, onBack: (() -> U
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(if (firstRun) "Welcome to RepoForge" else "Add account") },
-                navigationIcon = {
-                    if (onBack != null) {
-                        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                    }
-                },
-            )
+            if (!firstRun) {
+                TopAppBar(
+                    title = { Text("Add account") },
+                    navigationIcon = {
+                        if (onBack != null) {
+                            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                        }
+                    },
+                )
+            }
         },
     ) { padding ->
         Column(
@@ -139,20 +160,13 @@ fun AddAccountScreen(model: AddAccountModel, firstRun: Boolean, onBack: (() -> U
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (firstRun) {
-                Text(
-                    "Browse code, commits, issues and pull requests on GitHub, GitLab, Bitbucket, Gitea and Forgejo. " +
-                        "Sign in to as many accounts as you like and switch between them.",
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-            }
+            if (firstRun) Hero()
 
-            Text("Service", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                ForgeType.entries.take(2).forEach { ServiceChip(it, model) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                ForgeType.entries.drop(2).forEach { ServiceChip(it, model) }
+            Text("Choose a service", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            ForgeType.entries.chunked(2).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    row.forEach { ServiceCard(it, selected = model.type == it, onClick = { model.selectType(it) }) }
+                }
             }
 
             if (model.type.selfHostable) {
@@ -207,26 +221,20 @@ fun AddAccountScreen(model: AddAccountModel, firstRun: Boolean, onBack: (() -> U
                 },
                 visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
                 singleLine = true,
+                isError = model.error != null,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { model.signIn() }),
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(ForgeClients.tokenHelp(model.type), style = MaterialTheme.typography.bodyMedium)
-                    TextButton(
-                        onClick = { openUrl(context, ForgeClients.tokenPageUrl(model.type, model.host.ifBlank { model.type.hostHint })) },
-                        modifier = Modifier.padding(start = 0.dp),
-                    ) { Text("Create a token") }
-                    Text(
-                        "Tokens are encrypted on this device with the Android Keystore and only sent to the server above.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            model.error?.let {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Icon(Icons.Filled.Warning, null, tint = MaterialTheme.colorScheme.onErrorContainer)
+                        Text(it, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
-
-            model.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
             PrimaryAction(
                 text = "Sign in",
@@ -235,16 +243,92 @@ fun AddAccountScreen(model: AddAccountModel, firstRun: Boolean, onBack: (() -> U
                 onClick = model::signIn,
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Getting a token", style = MaterialTheme.typography.titleSmall)
+                    Text(ForgeClients.tokenHelp(model.type), style = MaterialTheme.typography.bodyMedium)
+                    TextButton(
+                        onClick = { openUrl(context, ForgeClients.tokenPageUrl(model.type, model.host.ifBlank { model.type.hostHint })) },
+                        contentPadding = PaddingValues(0.dp),
+                    ) {
+                        Icon(painterResource(R.drawable.ic_open_in_browser), null, Modifier.size(18.dp))
+                        Text("Create a ${model.type.displayName.substringBefore(' ')} token", Modifier.padding(start = 8.dp))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Lock, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            "Encrypted on this device with the Android Keystore, and only sent to the server above.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.ServiceChip(type: ForgeType, model: AddAccountModel) {
-    FilterChip(
-        selected = model.type == type,
-        onClick = { model.selectType(type) },
-        label = { Text(type.displayName) },
-        modifier = Modifier.weight(1f),
-    )
+private fun Hero() {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 32.dp, bottom = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            Modifier.size(88.dp).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painterResource(R.drawable.ic_launcher_foreground),
+                null,
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(88.dp),
+            )
+        }
+        Text("RepoForge", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            "Your repositories on GitHub, GitLab, Bitbucket, Gitea and Forgejo — in one app.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun RowScope.ServiceCard(type: ForgeType, selected: Boolean, onClick: () -> Unit) {
+    val border = if (selected) {
+        BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+    } else {
+        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    }
+    OutlinedCard(
+        onClick = onClick,
+        border = border,
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surface,
+        ),
+        modifier = Modifier.weight(1f).semantics { this.selected = selected },
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(brandColor(type)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(type.displayName.take(1), color = Color.White, fontWeight = FontWeight.Bold)
+            }
+            Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                Text(type.displayName, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    type.defaultHost?.let(::hostLabel) ?: "Self-hosted",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+            if (selected) Icon(Icons.Filled.CheckCircle, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+        }
+    }
 }

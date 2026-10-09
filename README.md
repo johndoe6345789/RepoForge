@@ -3,19 +3,24 @@
 A native Android client for **GitHub, GitLab, Bitbucket, Gitea and Forgejo** (including Codeberg).
 Sign in to as many accounts as you like, on public or self-hosted servers, and switch between them.
 
-| Sign in | Repositories | Code | Merge requests | File | Discussion |
-|---|---|---|---|---|---|
-| ![](app/screenshots/1-sign-in.png) | ![](app/screenshots/2-repositories.png) | ![](app/screenshots/3-code.png) | ![](app/screenshots/4-merge-requests.png) | ![](app/screenshots/5-file.png) | ![](app/screenshots/6-issue.png) |
+| Sign in | Repositories | Code | Commit |
+|---|---|---|---|
+| ![](app/screenshots/01-sign-in.png) | ![](app/screenshots/02-repositories.png) | ![](app/screenshots/03-code.png) | ![](app/screenshots/05-commit.png) |
+| **Merge request** | **Files changed** | **File** | **Dark theme** |
+| ![](app/screenshots/07-merge-request.png) | ![](app/screenshots/08-merge-request-files.png) | ![](app/screenshots/09-file.png) | ![](app/screenshots/03-code-dark.png) |
 
 ## Features
 
 - **Accounts** for GitHub.com and GitHub Enterprise, GitLab.com and self-managed GitLab, Bitbucket Cloud,
   and any Gitea or Forgejo server. Tokens are encrypted with the Android Keystore.
-- **Repositories**: your repositories, an instant filter, and server-wide search.
-- **Code**: browse folders on any branch, view files with line numbers, rendered Markdown, images,
-  and the README for each folder. Copy clone URLs or open anything in the browser.
-- **Commits** per branch.
-- **Issues and pull/merge requests**: filter by state, read the discussion, post comments, open new issues.
+- **Repositories**: your repositories with language, stars and visibility at a glance, an instant filter,
+  and server-wide search.
+- **Code**: browse folders on any branch, syntax-highlighted files with line numbers, rendered Markdown
+  (with highlighted code blocks and relative images), zoomable images, and each folder's README.
+- **Commits** per branch, each with its full message and a colour-coded diff.
+- **Issues and pull/merge requests**: filter by state, read the discussion, review the changed files,
+  post comments and open new issues.
+- **Light, dark or system theme**, with Material You dynamic colour on Android 12+.
 
 ## Signing in
 

@@ -5,7 +5,9 @@ import com.repoforge.data.model.Branch
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
+import com.repoforge.data.model.ChangeType
 import com.repoforge.data.model.FileBlob
+import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.IssueState
 import com.repoforge.data.model.Page
@@ -121,6 +123,25 @@ class GitHubClient(client: OkHttpClient, apiBase: String, token: String) : Forge
         return page(result, page, commits)
     }
 
+    override suspend fun getCommitDiff(repo: Repo, sha: String): List<FileDiff> {
+        val json = http.getJson { seg("repos"); path(repo.apiId); seg("commits", sha) }.json.asObject()
+        return json.arr("files")?.objects().orEmpty().map(::parseFileDiff)
+    }
+
+    override suspend fun getPullRequestDiff(repo: Repo, pull: Issue): List<FileDiff> {
+        val files = mutableListOf<FileDiff>()
+        var page = 1
+        while (page <= MAX_PAGES) {
+            val result = http.getJson {
+                seg("repos"); path(repo.apiId); seg("pulls", pull.number.toString(), "files"); q("per_page", 100); q("page", page)
+            }
+            files += result.json.objects().map(::parseFileDiff)
+            if (!result.hasNextLink) break
+            page++
+        }
+        return files
+    }
+
     override suspend fun listIssues(repo: Repo, state: StateFilter, page: Int): Page<Issue> {
         val result = http.getJson {
             seg("repos"); path(repo.apiId); seg("issues")
@@ -191,8 +212,24 @@ class GitHubClient(client: OkHttpClient, apiBase: String, token: String) : Forge
                 cloneHttps = json.str("clone_url"),
                 cloneSsh = json.str("ssh_url"),
                 ownerAvatarUrl = owner?.str("avatar_url"),
+                isArchived = json.bool("archived") == true,
             )
         }
+
+        /** GitHub's per-file diff, also used for Gitea-style payloads with the same fields. */
+        fun parseFileDiff(json: JsonObject) = FileDiff(
+            path = json.str("filename").orEmpty(),
+            oldPath = json.str("previous_filename"),
+            change = when (json.str("status")) {
+                "added" -> ChangeType.ADDED
+                "removed" -> ChangeType.DELETED
+                "renamed" -> ChangeType.RENAMED
+                else -> ChangeType.MODIFIED
+            },
+            additions = json.int("additions") ?: 0,
+            deletions = json.int("deletions") ?: 0,
+            patch = json.str("patch"),
+        )
 
         fun parseIssue(json: JsonObject): Issue {
             val isPull = json["pull_request"] != null || json["head"] != null

@@ -8,11 +8,13 @@ import com.repoforge.RepoForgeApp
 import com.repoforge.data.forge.ForgeClient
 import com.repoforge.data.forge.ForgeClients
 import com.repoforge.data.model.Account
+import com.repoforge.data.model.Commit
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.Repo
 import com.repoforge.ui.accounts.AddAccountModel
 import com.repoforge.ui.issue.IssueModel
 import com.repoforge.ui.issue.NewIssueModel
+import com.repoforge.ui.repo.CommitModel
 import com.repoforge.ui.repo.FileModel
 import com.repoforge.ui.repo.RepoModel
 import com.repoforge.ui.repos.ReposModel
@@ -21,9 +23,11 @@ import com.repoforge.ui.repos.ReposModel
 sealed interface Screen {
     class AddAccount(val model: AddAccountModel, val firstRun: Boolean) : Screen
     data object Accounts : Screen
+    data object Settings : Screen
     class Repos(val model: ReposModel) : Screen
     class RepoHome(val model: RepoModel) : Screen
     class File(val model: FileModel) : Screen
+    class CommitDetail(val model: CommitModel) : Screen
     class IssueDetail(val model: IssueModel) : Screen
     class NewIssue(val model: NewIssueModel) : Screen
 }
@@ -32,6 +36,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as RepoForgeApp
     val store = app.accountStore
+    val settings = app.settings
     val accounts = store.accounts
     val activeId = store.activeId
 
@@ -74,6 +79,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         stack += Screen.Accounts
     }
 
+    fun openSettings() {
+        stack += Screen.Settings
+    }
+
     fun switchAccount(id: String) {
         store.setActive(id)
         resetStack()
@@ -92,6 +101,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openFile(account: Account, repo: Repo, ref: String, path: String) {
         stack += Screen.File(FileModel(viewModelScope, account, clientFor(account), repo, ref, path))
+    }
+
+    fun openCommit(account: Account, repo: Repo, commit: Commit) {
+        stack += Screen.CommitDetail(CommitModel(viewModelScope, account, clientFor(account), repo, commit))
     }
 
     fun openIssue(account: Account, repo: Repo, issue: Issue) {

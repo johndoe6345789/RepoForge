@@ -5,7 +5,9 @@ import com.repoforge.data.model.Branch
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
+import com.repoforge.data.model.ChangeType
 import com.repoforge.data.model.FileBlob
+import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.IssueState
 import com.repoforge.data.model.Page
@@ -104,6 +106,14 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
         }
         return page(result, page, commits)
     }
+
+    override suspend fun getCommitDiff(repo: Repo, sha: String): List<FileDiff> = collectPages { page ->
+        http.getJson { seg("projects", repo.apiId, "repository", "commits", sha, "diff"); q("per_page", 100); q("page", page) }
+    }.map(::parseFileDiff)
+
+    override suspend fun getPullRequestDiff(repo: Repo, pull: Issue): List<FileDiff> = collectPages { page ->
+        http.getJson { seg("projects", repo.apiId, "merge_requests", pull.number.toString(), "diffs"); q("per_page", 100); q("page", page) }
+    }.map(::parseFileDiff)
 
     override suspend fun listIssues(repo: Repo, state: StateFilter, page: Int): Page<Issue> {
         val result = http.getJson {
@@ -204,6 +214,27 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
                 cloneHttps = json.str("http_url_to_repo"),
                 cloneSsh = json.str("ssh_url_to_repo"),
                 ownerAvatarUrl = json.str("avatar_url") ?: namespace?.str("avatar_url"),
+                isArchived = json.bool("archived") == true,
+            )
+        }
+
+        fun parseFileDiff(json: JsonObject): FileDiff {
+            // GitLab omits the patch (empty "diff") for binary files and diffs over its size limit.
+            val patch = json.str("diff")?.takeIf { it.isNotBlank() }?.trimEnd('\n')
+            val (added, removed) = Diffs.countChanges(patch)
+            val change = when {
+                json.bool("new_file") == true -> ChangeType.ADDED
+                json.bool("deleted_file") == true -> ChangeType.DELETED
+                json.bool("renamed_file") == true -> ChangeType.RENAMED
+                else -> ChangeType.MODIFIED
+            }
+            return FileDiff(
+                path = (if (change == ChangeType.DELETED) json.str("old_path") else json.str("new_path")).orEmpty(),
+                oldPath = json.str("old_path").takeIf { change == ChangeType.RENAMED },
+                change = change,
+                additions = added,
+                deletions = removed,
+                patch = patch,
             )
         }
 

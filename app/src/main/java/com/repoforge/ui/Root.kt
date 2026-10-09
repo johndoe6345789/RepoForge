@@ -15,9 +15,11 @@ import com.repoforge.ui.accounts.AccountsScreen
 import com.repoforge.ui.accounts.AddAccountScreen
 import com.repoforge.ui.issue.IssueScreen
 import com.repoforge.ui.issue.NewIssueScreen
+import com.repoforge.ui.repo.CommitScreen
 import com.repoforge.ui.repo.FileScreen
 import com.repoforge.ui.repo.RepoScreen
 import com.repoforge.ui.repos.ReposScreen
+import com.repoforge.ui.settings.SettingsScreen
 
 @Composable
 fun RepoForgeRoot(vm: AppViewModel) {
@@ -54,6 +56,7 @@ fun RepoForgeRoot(vm: AppViewModel) {
                 onRemove = vm::removeAccount,
                 onAdd = vm::addAccount,
             )
+            Screen.Settings -> SettingsScreen(vm.settings, onBack = { vm.back() }, onManageAccounts = vm::manageAccounts)
             is Screen.Repos -> ReposScreen(
                 model = screen.model,
                 accounts = accounts,
@@ -61,15 +64,18 @@ fun RepoForgeRoot(vm: AppViewModel) {
                 onSwitchAccount = { vm.switchAccount(it.id) },
                 onManageAccounts = vm::manageAccounts,
                 onAddAccount = vm::addAccount,
+                onOpenSettings = vm::openSettings,
             )
             is Screen.RepoHome -> RepoScreen(
                 model = screen.model,
                 onBack = { vm.back() },
                 onOpenFile = { path -> vm.openFile(screen.model.account, screen.model.repo, screen.model.ref, path) },
                 onOpenIssue = { vm.openIssue(screen.model.account, screen.model.repo, it) },
+                onOpenCommit = { vm.openCommit(screen.model.account, screen.model.repo, it) },
                 onNewIssue = { vm.newIssue(screen.model) },
             )
             is Screen.File -> FileScreen(model = screen.model, onBack = { vm.back() })
+            is Screen.CommitDetail -> CommitScreen(model = screen.model, onBack = { vm.back() })
             is Screen.IssueDetail -> IssueScreen(model = screen.model, onBack = { vm.back() })
             is Screen.NewIssue -> NewIssueScreen(model = screen.model, onBack = { vm.back() })
         }

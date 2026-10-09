@@ -42,8 +42,12 @@ class LiveApiTest {
         assertTrue("commits", commits.items.isNotEmpty())
         assertTrue("commit fields", commits.items.first().sha.length >= 7 && commits.items.first().date != null)
 
+        val diff = client.getCommitDiff(repo, commits.items.first().sha)
+        assertTrue("commit diff", diff.isNotEmpty() && diff.all { it.path.isNotEmpty() })
+
         val pulls = client.listPullRequests(repo, StateFilter.ALL, 1)
         assertTrue("pull requests", pulls.items.isNotEmpty())
+        val pullDiff = client.getPullRequestDiff(repo, pulls.items.first())
         if (anonymousComments) client.listComments(repo, pulls.items.first())
 
         if (expectIssues) {
@@ -52,7 +56,7 @@ class LiveApiTest {
             if (anonymousComments) client.listComments(repo, issues.items.first())
         }
         println("${client.javaClass.simpleName}: ${repo.fullName} — ${branches.size} branches, ${root.size} root entries, " +
-            "readme ${readme.path}, ${commits.items.size} commits, ${pulls.items.size} PRs")
+            "readme ${readme.path}, ${commits.items.size} commits (latest changes ${diff.size} files), ${pulls.items.size} PRs (first changes ${pullDiff.size} files)")
     }
 
     @Test

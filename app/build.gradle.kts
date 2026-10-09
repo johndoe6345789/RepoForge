@@ -12,8 +12,8 @@ android {
         applicationId = "com.repoforge"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {
@@ -89,6 +89,8 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")
     implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.45.0")
     implementation("com.mikepenz:multiplatform-markdown-renderer-coil3:0.45.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-code:0.45.0")
+    implementation("dev.snipme:highlights:1.1.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")

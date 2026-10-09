@@ -30,7 +30,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,6 +50,11 @@ import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.Repo
 import com.repoforge.ui.common.Avatar
+import com.repoforge.ui.common.DiffSummary
+import com.repoforge.ui.common.ListContentPadding
+import com.repoforge.ui.common.SkeletonList
+import com.repoforge.ui.common.defaultExpanded
+import com.repoforge.ui.common.diffFiles
 import com.repoforge.ui.common.EmptyState
 import com.repoforge.ui.common.ErrorState
 import com.repoforge.ui.common.LabelChip
@@ -68,6 +76,10 @@ class IssueModel(
     val issue: Issue,
 ) {
     val comments = Loadable(scope) { client.listComments(repo, issue) }
+    /** Changed files, for pull/merge requests. */
+    val files = Loadable(scope) { client.getPullRequestDiff(repo, issue) }
+    val expanded = mutableStateMapOf<String, Boolean>()
+    var showFiles by mutableStateOf(false)
     /** Comments posted from this screen, shown after the loaded thread. */
     val posted = mutableStateListOf<Comment>()
     var draft by mutableStateOf("")
@@ -123,58 +135,91 @@ fun IssueScreen(model: IssueModel, onBack: () -> Unit) {
                 },
             )
         },
-        bottomBar = { CommentComposer(model) },
+        bottomBar = { if (!model.showFiles) CommentComposer(model) },
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding)) {
-            item(key = "header") {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(issue.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        StateChip(issue.state, issue.isDraft)
-                        Text(
-                            buildString {
-                                issue.author?.let { append(it.login) }
-                                relativeTime(issue.createdAt).takeIf { it.isNotEmpty() }?.let { append(" opened $it") }
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    if (issue.sourceBranch != null && issue.targetBranch != null) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(painterResource(R.drawable.ic_branch), null, Modifier.size(16.dp))
-                            Text("${issue.sourceBranch} → ${issue.targetBranch}", style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
-                    if (issue.labels.isNotEmpty()) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { issue.labels.forEach { LabelChip(it) } }
-                    }
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            if (issue.isPullRequest) {
+                PrimaryTabRow(selectedTabIndex = if (model.showFiles) 1 else 0) {
+                    Tab(selected = !model.showFiles, onClick = { model.showFiles = false }, text = { Text("Conversation") })
+                    Tab(
+                        selected = model.showFiles,
+                        onClick = { model.showFiles = true },
+                        text = { Text(model.files.value?.let { "Files changed (${it.size})" } ?: "Files changed") },
+                    )
                 }
             }
-            item(key = "body") {
-                CommentCard(
-                    author = issue.author?.login,
-                    avatar = issue.author?.avatarUrl,
-                    time = issue.createdAt,
-                    body = issue.body?.takeIf { it.isNotBlank() } ?: "_No description provided._",
-                    resolveLink = resolveLink,
-                )
-            }
-            item(key = "divider") { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
-            val comments = model.comments.value
-            when {
-                comments != null -> {
-                    if (comments.isEmpty() && model.posted.isEmpty()) item(key = "none") { EmptyState("No comments yet") }
-                    items(comments + model.posted, key = { "comment:" + it.id }) { comment ->
-                        CommentCard(comment.author?.login, comment.author?.avatarUrl, comment.createdAt, comment.body, resolveLink)
+            if (model.showFiles) FilesTab(model) else ConversationTab(model, resolveLink)
+        }
+    }
+}
+
+@Composable
+private fun ConversationTab(model: IssueModel, resolveLink: (String) -> String?) {
+    val issue = model.issue
+    LazyColumn(Modifier.fillMaxSize()) {
+        item(key = "header") {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(issue.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StateChip(issue.state, issue.isDraft)
+                    Text(
+                        buildString {
+                            issue.author?.let { append(it.login) }
+                            relativeTime(issue.createdAt).takeIf { it.isNotEmpty() }?.let { append(" opened $it") }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (issue.sourceBranch != null && issue.targetBranch != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(painterResource(R.drawable.ic_branch), null, Modifier.size(16.dp))
+                        Text("${issue.sourceBranch} → ${issue.targetBranch}", style = MaterialTheme.typography.labelLarge)
                     }
                 }
-                model.comments.error != null -> item(key = "error") {
-                    ErrorState(model.comments.error!!, onRetry = model.comments::refresh)
-                }
-                else -> item(key = "loading") {
-                    CircularProgressIndicator(Modifier.padding(24.dp).size(28.dp))
+                if (issue.labels.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { issue.labels.forEach { LabelChip(it) } }
                 }
             }
+        }
+        item(key = "body") {
+            CommentCard(
+                author = issue.author?.login,
+                avatar = issue.author?.avatarUrl,
+                time = issue.createdAt,
+                body = issue.body?.takeIf { it.isNotBlank() } ?: "_No description provided._",
+                resolveLink = resolveLink,
+            )
+        }
+        item(key = "divider") { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
+        val comments = model.comments.value
+        when {
+            comments != null -> {
+                if (comments.isEmpty() && model.posted.isEmpty()) item(key = "none") { EmptyState("No comments yet") }
+                items(comments + model.posted, key = { "comment:" + it.id }) { comment ->
+                    CommentCard(comment.author?.login, comment.author?.avatarUrl, comment.createdAt, comment.body, resolveLink)
+                }
+            }
+            model.comments.error != null -> item(key = "error") {
+                ErrorState(model.comments.error!!, onRetry = model.comments::refresh)
+            }
+            else -> item(key = "loading") { SkeletonList(rows = 3) }
+        }
+    }
+}
+
+@Composable
+private fun FilesTab(model: IssueModel) {
+    LaunchedEffect(model) { model.files.ensureLoaded() }
+    val files = model.files.value
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = ListContentPadding) {
+        when {
+            files != null -> {
+                item(key = "summary") { DiffSummary(files) }
+                if (files.isEmpty()) item(key = "empty") { EmptyState("No changed files") }
+                diffFiles(files, model.expanded, defaultExpanded(files))
+            }
+            model.files.error != null -> item(key = "error") { ErrorState(model.files.error!!, onRetry = model.files::refresh) }
+            else -> item(key = "loading") { SkeletonList(rows = 5, avatar = false) }
         }
     }
 }

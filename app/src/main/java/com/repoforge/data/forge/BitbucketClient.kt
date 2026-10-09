@@ -6,6 +6,7 @@ import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
 import com.repoforge.data.model.FileBlob
+import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.IssueState
 import com.repoforge.data.model.Page
@@ -164,6 +165,16 @@ class BitbucketClient(client: OkHttpClient, apiBase: String, email: String?, tok
             )
         }
         return Page(commits, if (json.str("next") != null) page + 1 else null)
+    }
+
+    override suspend fun getCommitDiff(repo: Repo, sha: String): List<FileDiff> {
+        val url = http.url { repoPath(repo); seg("diff", sha) }
+        return Diffs.parseGitDiff(http.get(url, accept = "text/plain").text)
+    }
+
+    override suspend fun getPullRequestDiff(repo: Repo, pull: Issue): List<FileDiff> {
+        val url = http.url { repoPath(repo); seg("pullrequests", pull.number.toString(), "diff") }
+        return Diffs.parseGitDiff(http.get(url, accept = "text/plain").text)
     }
 
     override suspend fun listIssues(repo: Repo, state: StateFilter, page: Int): Page<Issue> {

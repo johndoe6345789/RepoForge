@@ -10,7 +10,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl
+import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.compose.elements.MarkdownHighlightedCodeBlock
+import com.mikepenz.markdown.compose.elements.MarkdownHighlightedCodeFence
+import com.repoforge.ui.theme.LocalDarkTheme
+import dev.snipme.highlights.Highlights
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.elements.MarkdownCheckBox
 import com.mikepenz.markdown.m3.markdownTypography
 
 /**
@@ -36,6 +42,16 @@ fun MarkdownView(
             }
         }
     }
+    val dark = LocalDarkTheme.current
+    val highlights = remember(dark) { Highlights.Builder().theme(CodeHighlighter.theme(dark)) }
+    val components = remember(highlights) {
+        markdownComponents(
+            codeBlock = { MarkdownHighlightedCodeBlock(it.content, it.node, it.typography.code, highlights) },
+            codeFence = { MarkdownHighlightedCodeFence(it.content, it.node, it.typography.code, highlights) },
+            // Overriding components drops Material 3's checkbox, so restore it for task lists.
+            checkbox = { MarkdownCheckBox(it.content, it.node, it.typography.text) },
+        )
+    }
     CompositionLocalProvider(LocalUriHandler provides handler) {
         val type = MaterialTheme.typography
         Markdown(
@@ -51,6 +67,7 @@ fun MarkdownView(
                 h6 = type.labelMedium,
             ),
             imageTransformer = Coil3ImageTransformerImpl,
+            components = components,
         )
     }
 }

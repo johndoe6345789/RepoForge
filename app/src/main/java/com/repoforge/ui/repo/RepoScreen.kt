@@ -1,6 +1,11 @@
 package com.repoforge.ui.repo
 
 import androidx.activity.compose.BackHandler
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.Surface
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -17,9 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
@@ -69,11 +72,17 @@ import com.repoforge.data.model.IssueState
 import com.repoforge.data.model.StateFilter
 import com.repoforge.data.model.TreeEntry
 import com.repoforge.ui.common.Avatar
+import com.repoforge.ui.common.EmptyState
+import com.repoforge.ui.common.IconLabel
+import com.repoforge.ui.common.LanguageLabel
+import com.repoforge.ui.common.OutlineBadge
+import com.repoforge.ui.common.SkeletonList
+import com.repoforge.ui.common.SkeletonText
+import com.repoforge.ui.repos.formatCount
 import com.repoforge.ui.common.ErrorState
 import com.repoforge.ui.common.LabelChip
 import com.repoforge.ui.common.ListContentPadding
 import com.repoforge.ui.common.LoadableContent
-import com.repoforge.ui.common.LoadingState
 import com.repoforge.ui.common.MarkdownView
 import com.repoforge.ui.common.MetaRow
 import com.repoforge.ui.common.Paged
@@ -91,6 +100,7 @@ fun RepoScreen(
     onBack: () -> Unit,
     onOpenFile: (String) -> Unit,
     onOpenIssue: (Issue) -> Unit,
+    onOpenCommit: (Commit) -> Unit,
     onNewIssue: () -> Unit,
 ) {
     val repo = model.repo
@@ -173,12 +183,14 @@ fun RepoScreen(
             }
             when (model.tab) {
                 RepoTab.CODE -> CodeTab(model, onOpenFile, onPickBranch = { branchPicker = true })
-                RepoTab.COMMITS -> CommitsTab(model, onPickBranch = { branchPicker = true })
+                RepoTab.COMMITS -> CommitsTab(model, onPickBranch = { branchPicker = true }, onOpenCommit = onOpenCommit)
                 RepoTab.ISSUES -> IssueList(
                     paged = model.issues(),
                     filter = model.issueFilter,
                     onFilter = { model.issueFilter = it },
                     closedLabel = "Closed",
+                    emptyIcon = R.drawable.ic_issue,
+                    emptyMessage = "No issues",
                     onOpen = onOpenIssue,
                 )
                 RepoTab.PULLS -> IssueList(
@@ -186,6 +198,8 @@ fun RepoScreen(
                     filter = model.pullFilter,
                     onFilter = { model.pullFilter = it },
                     closedLabel = "Merged / closed",
+                    emptyIcon = R.drawable.ic_pull_request,
+                    emptyMessage = "No ${model.account.type.pullRequestName.lowercase()}",
                     onOpen = onOpenIssue,
                 )
             }
@@ -198,27 +212,25 @@ fun RepoScreen(
 }
 
 @Composable
-private fun RepoHeader(model: RepoModel, onPickBranch: () -> Unit) {
+private fun RepoHeader(model: RepoModel) {
     val repo = model.repo
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Avatar(repo.ownerAvatarUrl, repo.owner, size = 36.dp)
+            Column(Modifier.padding(start = 12.dp)) {
+                Text(repo.owner, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(repo.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            }
+        }
         repo.description?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
         MetaRow {
-            if (repo.isPrivate) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Lock, null, Modifier.size(14.dp))
-                    Text(" Private", style = MaterialTheme.typography.labelMedium)
-                }
-            }
-            repo.stars?.let {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Star, null, Modifier.size(14.dp))
-                    Text(" $it", style = MaterialTheme.typography.labelMedium)
-                }
-            }
-            repo.forks?.let { Text("$it forks", style = MaterialTheme.typography.labelMedium) }
-            repo.language?.let { Text(it, style = MaterialTheme.typography.labelMedium) }
+            if (repo.isPrivate) OutlineBadge("Private")
+            if (repo.isArchived) OutlineBadge("Archived", color = androidx.compose.ui.graphics.Color(0xFFBF8700))
+            if (repo.isFork) OutlineBadge("Fork")
+            repo.language?.let { LanguageLabel(it) }
+            repo.stars?.let { IconLabel(formatCount(it), icon = Icons.Filled.Star) }
+            repo.forks?.let { IconLabel(formatCount(it), drawable = R.drawable.ic_branch) }
         }
-        BranchChip(model.ref, onPickBranch)
     }
 }
 
@@ -226,8 +238,9 @@ private fun RepoHeader(model: RepoModel, onPickBranch: () -> Unit) {
 private fun BranchChip(ref: String, onClick: () -> Unit) {
     AssistChip(
         onClick = onClick,
-        label = { Text(ref, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        label = { Text(ref, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp)) },
         leadingIcon = { Icon(painterResource(R.drawable.ic_branch), null, Modifier.size(18.dp)) },
+        trailingIcon = { Icon(Icons.Filled.ArrowDropDown, null, Modifier.size(18.dp)) },
     )
 }
 
@@ -237,8 +250,8 @@ private fun CodeTab(model: RepoModel, onOpenFile: (String) -> Unit, onPickBranch
     val context = LocalContext.current
     PullToRefreshBox(isRefreshing = tree.loading && tree.value != null, onRefresh = model::refreshCode) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = ListContentPadding) {
-            item(key = "header") { RepoHeader(model, onPickBranch) }
-            item(key = "breadcrumbs") { Breadcrumbs(model.path, onNavigate = model::openDir) }
+            item(key = "header") { RepoHeader(model) }
+            item(key = "pathbar") { PathBar(model, onPickBranch) }
             item(key = "divider") { HorizontalDivider() }
             val entries = tree.value
             when {
@@ -261,25 +274,33 @@ private fun CodeTab(model: RepoModel, onOpenFile: (String) -> Unit, onPickBranch
                 tree.error != null -> item(key = "error") { ErrorState(tree.error!!, onRetry = tree::refresh) }
                 else -> item(key = "loading") {
                     androidx.compose.runtime.LaunchedEffect(tree) { tree.ensureLoaded() }
-                    Box(Modifier.fillMaxWidth().heightIn(min = 160.dp)) { LoadingState() }
+                    SkeletonList(rows = 6, avatar = false)
                 }
             }
         }
     }
 }
 
+/** The branch picker followed by the current folder's path; each segment jumps to that folder. */
 @Composable
-private fun Breadcrumbs(path: String, onNavigate: (String) -> Unit) {
-    val parts = path.split('/').filter { it.isNotEmpty() }
+private fun PathBar(model: RepoModel, onPickBranch: () -> Unit) {
+    val parts = model.path.split('/').filter { it.isNotEmpty() }
+    val scroll = rememberScrollState()
+    androidx.compose.runtime.LaunchedEffect(model.path) { scroll.animateScrollTo(scroll.maxValue) }
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+        Modifier.fillMaxWidth().horizontalScroll(scroll).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = { onNavigate("") }) { Text("root") }
+        BranchChip(model.ref, onPickBranch)
+        if (parts.isNotEmpty()) {
+            TextButton(onClick = { model.openDir("") }) { Text(model.repo.name, fontWeight = FontWeight.Medium) }
+        }
         parts.forEachIndexed { index, part ->
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(16.dp))
+            Text("/", color = MaterialTheme.colorScheme.outline)
             val target = parts.take(index + 1).joinToString("/")
-            TextButton(onClick = { onNavigate(target) }, enabled = index != parts.lastIndex) { Text(part) }
+            TextButton(onClick = { model.openDir(target) }, enabled = index != parts.lastIndex) {
+                Text(part, fontWeight = if (index == parts.lastIndex) FontWeight.SemiBold else null)
+            }
         }
     }
 }
@@ -316,7 +337,7 @@ private fun ReadmeCard(model: RepoModel, readme: TreeEntry) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Text(readme.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 16.dp, top = 12.dp))
-        LoadableContent(loadable, Modifier.heightIn(min = 120.dp)) { blob ->
+        LoadableContent(loadable, Modifier.heightIn(min = 120.dp), placeholder = { SkeletonText() }) { blob ->
             val type = model.account.type
             if (blob.isMarkdown) {
                 val markdown = remember(blob) {
@@ -337,17 +358,16 @@ private fun ReadmeCard(model: RepoModel, readme: TreeEntry) {
 }
 
 @Composable
-private fun CommitsTab(model: RepoModel, onPickBranch: () -> Unit) {
+private fun CommitsTab(model: RepoModel, onPickBranch: () -> Unit, onOpenCommit: (Commit) -> Unit) {
     val commits = model.commits()
-    val context = LocalContext.current
     PullToRefreshBox(isRefreshing = commits.refreshing, onRefresh = commits::refresh) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = ListContentPadding) {
             item(key = "branch") { Box(Modifier.padding(horizontal = 16.dp)) { BranchChip(model.ref, onPickBranch) } }
             items(commits.items, key = { "commit:" + it.sha }) { commit ->
-                CommitRow(commit) { commit.webUrl?.let { openUrl(context, it) } }
-                HorizontalDivider()
+                CommitRow(commit) { onOpenCommit(commit) }
+                HorizontalDivider(Modifier.padding(start = 64.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
             }
-            pagedFooter(commits, emptyMessage = "No commits")
+            pagedFooter(commits, emptyMessage = "No commits on this branch")
         }
     }
 }
@@ -364,7 +384,16 @@ private fun CommitRow(commit: Commit, onClick: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
             )
         },
-        trailingContent = { Text(commit.shortSha, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelMedium) },
+        trailingContent = {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(6.dp)) {
+                Text(
+                    commit.shortSha,
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+        },
     )
 }
 
@@ -374,6 +403,8 @@ private fun IssueList(
     filter: StateFilter,
     onFilter: (StateFilter) -> Unit,
     closedLabel: String,
+    @DrawableRes emptyIcon: Int,
+    emptyMessage: String,
     onOpen: (Issue) -> Unit,
 ) {
     PullToRefreshBox(isRefreshing = paged.refreshing, onRefresh = paged::refresh) {
@@ -399,9 +430,13 @@ private fun IssueList(
             }
             items(paged.items, key = { "issue:" + it.number }) { issue ->
                 IssueRow(issue) { onOpen(issue) }
-                HorizontalDivider()
+                HorizontalDivider(Modifier.padding(start = 56.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
             }
-            pagedFooter(paged, emptyMessage = "Nothing here")
+            if (paged.isEmptyAndDone) {
+                item(key = "empty") { EmptyState(emptyMessage, icon = emptyIcon) }
+            } else {
+                pagedFooter(paged, emptyMessage = emptyMessage, skeletonAvatars = false)
+            }
         }
     }
 }
@@ -430,13 +465,16 @@ fun IssueRow(issue: Issue, onClick: () -> Unit) {
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
-                if (issue.labels.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { issue.labels.take(4).forEach { LabelChip(it) } }
+                if (issue.labels.isNotEmpty() || issue.isDraft) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (issue.isDraft && issue.state == IssueState.OPEN) OutlineBadge("Draft")
+                        issue.labels.take(4).forEach { LabelChip(it) }
+                    }
                 }
             }
         },
         trailingContent = issue.commentCount?.takeIf { it > 0 }?.let { count ->
-            { Text("$count 💬", style = MaterialTheme.typography.labelMedium) }
+            { IconLabel(count.toString(), drawable = R.drawable.ic_comment) }
         },
     )
 }

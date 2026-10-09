@@ -8,13 +8,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -40,16 +39,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.repoforge.R
 import com.repoforge.data.forge.ForgeClient
 import com.repoforge.data.model.Account
 import com.repoforge.data.model.Repo
 import com.repoforge.data.model.hostLabel
 import com.repoforge.ui.common.Avatar
+import com.repoforge.ui.common.IconLabel
+import com.repoforge.ui.common.LanguageLabel
+import com.repoforge.ui.common.OutlineBadge
 import com.repoforge.ui.common.ListContentPadding
 import com.repoforge.ui.common.MetaRow
 import com.repoforge.ui.common.Paged
@@ -93,6 +97,7 @@ fun ReposScreen(
     onSwitchAccount: (Account) -> Unit,
     onManageAccounts: () -> Unit,
     onAddAccount: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val account = model.account
     var menuOpen by remember { mutableStateOf(false) }
@@ -129,6 +134,9 @@ fun ReposScreen(
                             )
                         }
                     }
+                },
+                actions = {
+                    IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, "Settings") }
                 },
             )
         },
@@ -172,7 +180,7 @@ fun ReposScreen(
                 }
                 items(visible, key = { "repo:" + it.apiId }) { repo ->
                     RepoRow(repo, onClick = { onOpenRepo(repo) })
-                    HorizontalDivider()
+                    HorizontalDivider(Modifier.padding(start = 72.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
                 }
                 if (search != null || query.isEmpty()) {
                     pagedFooter(list, emptyMessage = if (search != null) "No repositories found" else "No repositories yet")
@@ -218,39 +226,46 @@ private fun AccountMenu(
         }
         HorizontalDivider()
         DropdownMenuItem(leadingIcon = { Icon(Icons.Filled.Add, null) }, text = { Text("Add account") }, onClick = { onDismiss(); onAdd() })
-        DropdownMenuItem(leadingIcon = { Icon(Icons.Filled.Settings, null) }, text = { Text("Manage accounts") }, onClick = { onDismiss(); onManage() })
+        DropdownMenuItem(leadingIcon = { Icon(Icons.Filled.AccountCircle, null) }, text = { Text("Manage accounts") }, onClick = { onDismiss(); onManage() })
     }
 }
 
 @Composable
 fun RepoRow(repo: Repo, onClick: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     ListItem(
         modifier = Modifier.clickable(onClick = onClick),
         leadingContent = { Avatar(repo.ownerAvatarUrl, repo.owner, size = 40.dp) },
-        overlineContent = { Text(repo.owner, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         headlineContent = {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(repo.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                if (repo.isPrivate) Icon(Icons.Filled.Lock, "Private", Modifier.size(14.dp))
-            }
+            Text(
+                buildAnnotatedString {
+                    withStyle(SpanStyle(color = muted)) { append(repo.owner); append(" / ") }
+                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(repo.name) }
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         },
         supportingContent = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.padding(top = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 repo.description?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                 MetaRow {
-                    if (repo.isFork) {
-                        Icon(painterResource(R.drawable.ic_branch), "Fork", Modifier.size(14.dp))
-                    }
-                    repo.language?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
-                    repo.stars?.let {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.Star, null, Modifier.size(14.dp))
-                            Text(" $it", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                    repo.updatedAt?.let { Text("Updated ${relativeTime(it)}", style = MaterialTheme.typography.labelSmall) }
+                    if (repo.isPrivate) OutlineBadge("Private")
+                    if (repo.isArchived) OutlineBadge("Archived", color = Color(0xFFBF8700))
+                    if (repo.isFork) OutlineBadge("Fork")
+                    repo.language?.let { LanguageLabel(it) }
+                    repo.stars?.takeIf { it > 0 }?.let { IconLabel(formatCount(it), icon = Icons.Filled.Star) }
+                    repo.updatedAt?.let { Text(relativeTime(it), style = MaterialTheme.typography.labelMedium, color = muted, maxLines = 1) }
                 }
             }
         },
     )
+}
+
+/** 1234 → "1.2k", for star counts. */
+fun formatCount(count: Int): String = when {
+    count < 1000 -> count.toString()
+    count < 10_000 -> "%.1fk".format(count / 1000.0).replace(".0k", "k")
+    count < 1_000_000 -> "${count / 1000}k"
+    else -> "%.1fM".format(count / 1_000_000.0)
 }
