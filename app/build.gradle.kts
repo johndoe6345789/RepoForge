@@ -12,12 +12,37 @@ android {
         applicationId = "com.repoforge"
         minSdk = 26
         targetSdk = 37
-        versionCode = 5
-        versionName = "0.5.0"
+        // CI passes the run number so every published build is an upgrade of the previous one.
+        versionCode = System.getenv("VERSION_CODE")?.toInt() ?: 5
+        versionName = System.getenv("VERSION_NAME") ?: "0.5-dev"
+    }
+
+    signingConfigs {
+        // Committed on purpose: a fixed debug key lets each published debug APK install over the
+        // previous one. It is a throwaway key (like Android's default debug.keystore), not a secret.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+        // Real release key, only when CI provides it (see README: "Signing release builds").
+        System.getenv("RELEASE_KEYSTORE")?.let { keystore ->
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = System.getenv("RELEASE_STORE_PASSWORD")
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

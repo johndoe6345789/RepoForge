@@ -13,6 +13,14 @@ Sign in to as many accounts as you like, on public or self-hosted servers, and s
 | **CI runs** | **Jobs and artifacts** | **Job log** | **Job log (dark)** |
 | ![](app/screenshots/15-ci-runs.png) | ![](app/screenshots/16-ci-run.png) | ![](app/screenshots/17-ci-log.png) | ![](app/screenshots/17-ci-log-dark.png) |
 
+## Download
+
+Every commit to `main` publishes a new release on the [Releases page](../../releases/latest), named `RepoForge 0.5.<build>`:
+- `RepoForge-0.5.<build>-debug.apk`: install this one. Every release is signed with the same key, so a new one installs over the old one and keeps your accounts and clones.
+- `RepoForge-0.5.<build>.apk`: a minified release build, published only when a release signing key is configured (see below).
+
+Pull requests build the same APKs as workflow artifacts in the [Actions tab](../../actions), along with `ui-screenshots`, but don't publish a release.
+
 ## Features
 
 - **Accounts** for GitHub.com and GitHub Enterprise, GitLab.com and self-managed GitLab, Bitbucket Cloud,
@@ -74,3 +82,16 @@ Requires JDK 17+ and the Android SDK with platform 37 (Android 17).
 ```
 
 Dependencies resolve through Google's Maven Central mirror first, falling back to Maven Central.
+
+### Signing release builds (optional)
+
+The debug APKs are signed with `app/debug.keystore`. That key is committed on purpose: it's a throwaway key, like the debug key Android Studio generates, and keeping it fixed is what lets each release install over the previous one. To also publish a release build signed with your own key, add these repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `RELEASE_KEYSTORE_BASE64` | `base64 -w0 my-release.jks` |
+| `RELEASE_STORE_PASSWORD` | keystore password |
+| `RELEASE_KEY_ALIAS` | key alias |
+| `RELEASE_KEY_PASSWORD` | key password |
+
+Keep a backup of that keystore: Android only accepts updates signed with the same key.
