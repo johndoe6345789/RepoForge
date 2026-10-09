@@ -1,13 +1,21 @@
 package com.repoforge.data.forge
 
 import com.repoforge.data.model.Branch
+import com.repoforge.data.model.CiArtifact
+import com.repoforge.data.model.CiFeatures
+import com.repoforge.data.model.CiJob
+import com.repoforge.data.model.CiRun
+import java.io.OutputStream
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
 import com.repoforge.data.model.FileBlob
 import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
+import com.repoforge.data.model.MergeMethod
+import com.repoforge.data.model.MergeOutcome
 import com.repoforge.data.model.Page
+import com.repoforge.data.model.PullDetail
 import com.repoforge.data.model.Repo
 import com.repoforge.data.model.StateFilter
 import com.repoforge.data.model.TreeEntry
@@ -46,6 +54,44 @@ interface ForgeClient {
     suspend fun addComment(repo: Repo, issue: Issue, body: String): Comment
 
     suspend fun createIssue(repo: Repo, title: String, body: String): Issue
+
+    /** Merge methods the service offers (a repository may still disallow some). */
+    val mergeMethods: List<MergeMethod>
+
+    /** Fresh state of a pull request, including whether it can be merged. */
+    suspend fun getPullRequest(repo: Repo, number: Long): PullDetail
+
+    /** Merges the pull request, optionally deleting its branch afterwards. */
+    suspend fun mergePullRequest(
+        repo: Repo,
+        detail: PullDetail,
+        method: MergeMethod,
+        title: String?,
+        message: String?,
+        deleteBranch: Boolean,
+    ): MergeOutcome
+
+    /** Deletes the pull request's branch, e.g. after it was merged. */
+    suspend fun deleteBranch(repo: Repo, detail: PullDetail)
+
+    /** What this service's CI API supports. */
+    val ci: CiFeatures
+
+    /** CI runs/pipelines, newest first. */
+    suspend fun listCiRuns(repo: Repo, page: Int): Page<CiRun>
+
+    /** Fresh state of one run, for following it while it's in progress. */
+    suspend fun getCiRun(repo: Repo, id: String): CiRun
+
+    suspend fun listCiJobs(repo: Repo, run: CiRun): List<CiJob>
+
+    /** A job's full log as plain text (it may contain ANSI colour codes). */
+    suspend fun getCiJobLog(repo: Repo, run: CiRun, job: CiJob): String
+
+    suspend fun listCiArtifacts(repo: Repo, run: CiRun): List<CiArtifact>
+
+    /** Streams an artifact's archive into [out]; returns the number of bytes written. */
+    suspend fun downloadCiArtifact(artifact: CiArtifact, out: OutputStream, onProgress: (Long, Long?) -> Unit): Long
 
     /** The README at the repository root, or null when there isn't one. */
     suspend fun getReadme(repo: Repo, ref: String): FileBlob? {

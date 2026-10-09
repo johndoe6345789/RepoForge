@@ -2,6 +2,14 @@ package com.repoforge.data.forge
 
 import com.repoforge.data.forge.ForgeClient.Companion.PAGE_SIZE
 import com.repoforge.data.model.Branch
+import com.repoforge.data.model.CiArtifact
+import com.repoforge.data.model.CiFeatures
+import com.repoforge.data.model.CiJob
+import com.repoforge.data.model.CiRun
+import com.repoforge.data.model.CiStatus
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import java.io.OutputStream
+import java.time.Instant
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
@@ -10,11 +18,16 @@ import com.repoforge.data.model.FileBlob
 import com.repoforge.data.model.FileDiff
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.IssueState
+import com.repoforge.data.model.MergeMethod
+import com.repoforge.data.model.MergeOutcome
+import com.repoforge.data.model.Mergeability
+import com.repoforge.data.model.PullDetail
 import com.repoforge.data.model.Page
 import com.repoforge.data.model.Repo
 import com.repoforge.data.model.StateFilter
 import com.repoforge.data.model.TreeEntry
 import com.repoforge.data.model.User
+import com.repoforge.data.net.ForgeException
 import com.repoforge.data.net.Http
 import com.repoforge.data.net.HttpResult
 import com.repoforge.data.net.arr
@@ -151,6 +164,51 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
         return parseIssue(json.asObject(), isPullRequest = false)
     }
 
+    override val mergeMethods = listOf(MergeMethod.MERGE, MergeMethod.SQUASH)
+
+    override suspend fun getPullRequest(repo: Repo, number: Long): PullDetail {
+        val json = http.getJson { seg("projects", repo.apiId, "merge_requests", number.toString()) }.json.asObject()
+        val sourceId = (json["source_project_id"] as? JsonPrimitive)?.content
+        val targetId = (json["target_project_id"] as? JsonPrimitive)?.content
+        val headCloneUrl = if (sourceId == null || sourceId == targetId) {
+            repo.cloneHttps
+        } else {
+            runCatching { http.getJson { seg("projects", sourceId) }.json.asObject().str("http_url_to_repo") }.getOrNull()
+        }
+        return parsePullDetail(json, repo.cloneHttps, headCloneUrl, sourceId ?: repo.apiId)
+    }
+
+    override suspend fun mergePullRequest(
+        repo: Repo,
+        detail: PullDetail,
+        method: MergeMethod,
+        title: String?,
+        message: String?,
+        deleteBranch: Boolean,
+    ): MergeOutcome {
+        val url = http.url { seg("projects", repo.apiId, "merge_requests", detail.pull.number.toString(), "merge") }
+        val commitMessage = listOfNotNull(title?.takeIf { it.isNotBlank() }, message?.takeIf { it.isNotBlank() })
+            .joinToString("\n\n").takeIf { it.isNotEmpty() }
+        val json = http.putJson(url, buildJsonObject {
+            put("squash", method == MergeMethod.SQUASH)
+            put("should_remove_source_branch", deleteBranch)
+            if (commitMessage != null) {
+                put(if (method == MergeMethod.SQUASH) "squash_commit_message" else "merge_commit_message", commitMessage)
+            }
+        }).json.asObject()
+        val sha = json.str("merge_commit_sha") ?: json.str("squash_commit_sha") ?: json.str("sha")
+        return MergeOutcome(sha, branchDeleted = deleteBranch)
+    }
+
+    override suspend fun deleteBranch(repo: Repo, detail: PullDetail) {
+        val project = detail.headRepoApiId ?: repo.apiId
+        try {
+            http.delete(http.url { seg("projects", project, "repository", "branches", detail.headBranch) })
+        } catch (e: ForgeException) {
+            if (e.code != 404) throw e // already gone
+        }
+    }
+
     private fun com.repoforge.data.net.UrlSpec.stateParam(state: StateFilter) {
         when (state) {
             StateFilter.OPEN -> q("state", "opened")
@@ -173,6 +231,64 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
         return all
     }
 
+    override val ci = CiFeatures("Pipelines")
+
+    override suspend fun listCiRuns(repo: Repo, page: Int): Page<CiRun> {
+        val result = http.getJson { seg("projects", repo.apiId, "pipelines"); q("per_page", PAGE_SIZE); q("page", page) }
+        return page(result, page, result.json.objects().map(::parsePipeline))
+    }
+
+    override suspend fun getCiRun(repo: Repo, id: String): CiRun =
+        parsePipeline(http.getJson { seg("projects", repo.apiId, "pipelines", id) }.json.asObject())
+
+    private suspend fun pipelineJobs(repo: Repo, run: CiRun): List<JsonObject> {
+        val jobs = mutableListOf<JsonObject>()
+        var page = 1
+        while (page <= MAX_PAGES) {
+            val result = http.getJson { seg("projects", repo.apiId, "pipelines", run.id, "jobs"); q("per_page", 100); q("page", page) }
+            jobs += result.json.objects()
+            page = nextPage(result, page) ?: break
+        }
+        // Newest first from the API; oldest first follows the stage order.
+        return jobs.sortedBy { it.long("id") }
+    }
+
+    override suspend fun listCiJobs(repo: Repo, run: CiRun): List<CiJob> = pipelineJobs(repo, run).map { json ->
+        CiJob(
+            id = json.long("id")?.toString().orEmpty(),
+            name = json.str("name") ?: "Job",
+            stage = json.str("stage"),
+            status = ciStatus(json.str("status")),
+            startedAt = json.instant("started_at"),
+            finishedAt = json.instant("finished_at"),
+            webUrl = json.str("web_url"),
+        )
+    }
+
+    override suspend fun getCiJobLog(repo: Repo, run: CiRun, job: CiJob): String =
+        http.getText(http.url { seg("projects", repo.apiId, "jobs", job.id, "trace") })
+
+    /** GitLab keeps artifacts per job: each job with an archive becomes one artifact. */
+    override suspend fun listCiArtifacts(repo: Repo, run: CiRun): List<CiArtifact> = pipelineJobs(repo, run).mapNotNull { json ->
+        val file = json.obj("artifacts_file") ?: return@mapNotNull null
+        val id = json.long("id")?.toString() ?: return@mapNotNull null
+        val name = json.str("name") ?: "job-$id"
+        val expiresAt = json.instant("artifacts_expire_at")
+        CiArtifact(
+            id = id,
+            name = name,
+            sizeBytes = file.long("size"),
+            expired = expiresAt?.isBefore(Instant.now()) == true,
+            createdAt = json.instant("finished_at"),
+            expiresAt = expiresAt,
+            downloadUrl = http.url { seg("projects", repo.apiId, "jobs", id, "artifacts") }.toString(),
+            fileName = "${safeFileName(name)}-artifacts.zip",
+        )
+    }
+
+    override suspend fun downloadCiArtifact(artifact: CiArtifact, out: OutputStream, onProgress: (Long, Long?) -> Unit): Long =
+        http.download(artifact.downloadUrl.toHttpUrl(), out, onProgress)
+
     private fun <T> page(result: HttpResult, page: Int, items: List<T>) = Page(items, nextPage(result, page))
 
     private fun nextPage(result: HttpResult, page: Int): Int? {
@@ -186,6 +302,37 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
 
     companion object {
         private const val MAX_PAGES = 20
+
+        fun ciStatus(status: String?): CiStatus = when (status) {
+            "created", "waiting_for_resource", "preparing", "pending", "scheduled", "waiting_for_callback" -> CiStatus.QUEUED
+            "running" -> CiStatus.RUNNING
+            "success" -> CiStatus.SUCCESS
+            "failed" -> CiStatus.FAILURE
+            "canceled", "canceling" -> CiStatus.CANCELLED
+            "skipped" -> CiStatus.SKIPPED
+            "manual" -> CiStatus.ACTION_REQUIRED
+            else -> CiStatus.UNKNOWN
+        }
+
+        fun parsePipeline(json: JsonObject): CiRun {
+            val iid = json.long("iid")
+            return CiRun(
+                id = json.long("id")?.toString().orEmpty(),
+                number = iid ?: json.long("id"),
+                // Pipelines have no title of their own unless the CI file names them.
+                title = json.str("name")?.takeIf { it.isNotBlank() } ?: json.str("ref") ?: "Pipeline",
+                workflow = null,
+                branch = json.str("ref"),
+                sha = json.str("sha"),
+                event = json.str("source")?.replace('_', ' '),
+                status = ciStatus(json.str("status")),
+                actor = json.obj("user")?.let(::parseUser),
+                createdAt = json.instant("created_at"),
+                startedAt = json.instant("started_at"),
+                finishedAt = json.instant("finished_at") ?: if (ciStatus(json.str("status")).isFinished) json.instant("updated_at") else null,
+                webUrl = json.str("web_url"),
+            )
+        }
 
         fun parseUser(json: JsonObject) = User(
             login = json.str("username").orEmpty(),
@@ -258,6 +405,39 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
             sourceBranch = json.str("source_branch"),
             targetBranch = json.str("target_branch"),
         )
+
+        fun parsePullDetail(json: JsonObject, baseCloneUrl: String?, headCloneUrl: String?, headProject: String?): PullDetail {
+            val pull = parseIssue(json, isPullRequest = true)
+            val status = json.str("detailed_merge_status")
+            val (mergeability, note) = when {
+                pull.state != IssueState.OPEN -> Mergeability.UNKNOWN to null
+                json.bool("has_conflicts") == true || status == "conflict" -> Mergeability.CONFLICTS to null
+                status == "mergeable" -> Mergeability.MERGEABLE to null
+                status in setOf("checking", "unchecked", "preparing", "approvals_syncing") ->
+                    Mergeability.CHECKING to "GitLab is checking whether this can be merged"
+                status == "draft_status" -> Mergeability.BLOCKED to "Draft merge requests can't be merged"
+                status in setOf("ci_must_pass", "ci_still_running") -> Mergeability.BLOCKED to "The pipeline must succeed first"
+                status == "not_approved" -> Mergeability.BLOCKED to "Approval is required"
+                status == "discussions_not_resolved" -> Mergeability.BLOCKED to "All threads must be resolved"
+                status == "need_rebase" -> Mergeability.BLOCKED to "The branch must be rebased first"
+                status != null -> Mergeability.BLOCKED to "Can't be merged yet (${status.replace('_', ' ')})"
+                // GitLab before 15.6 only has merge_status.
+                json.str("merge_status") == "cannot_be_merged" -> Mergeability.CONFLICTS to null
+                json.str("merge_status") == "can_be_merged" -> Mergeability.MERGEABLE to null
+                else -> Mergeability.CHECKING to null
+            }
+            return PullDetail(
+                pull = pull,
+                mergeability = mergeability,
+                mergeNote = note,
+                headBranch = json.str("source_branch").orEmpty(),
+                baseBranch = json.str("target_branch").orEmpty(),
+                headSha = json.str("sha"),
+                headCloneUrl = headCloneUrl,
+                baseCloneUrl = baseCloneUrl,
+                headRepoApiId = headProject,
+            )
+        }
 
         fun parseComment(json: JsonObject) = Comment(
             id = (json["id"] as? JsonPrimitive)?.content.orEmpty(),

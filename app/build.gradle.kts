@@ -12,8 +12,8 @@ android {
         applicationId = "com.repoforge"
         minSdk = 26
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 5
+        versionName = "0.5.0"
     }
 
     buildTypes {
@@ -37,6 +37,16 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/*.SF",
+                "META-INF/*.DSA", "META-INF/*.RSA", "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
+                "plugin.properties", "about.html",
+            )
+        }
+    }
+
     testOptions {
         unitTests.isReturnDefaultValues = true
         unitTests.isIncludeAndroidResources = true
@@ -54,7 +64,7 @@ kotlin {
 // `-Pscreenshots`.
 tasks.withType<Test>().configureEach {
     if (!project.hasProperty("live")) {
-        exclude("**/LiveApiTest*")
+        exclude("**/Live*Test*")
     }
     if (project.hasProperty("screenshots")) {
         systemProperty("roborazzi.test.record", "true")
@@ -91,6 +101,12 @@ dependencies {
     implementation("com.mikepenz:multiplatform-markdown-renderer-coil3:0.45.0")
     implementation("com.mikepenz:multiplatform-markdown-renderer-code:0.45.0")
     implementation("dev.snipme:highlights:1.1.0")
+
+    // Local git (clone/pull/commit/push/merge). 5.13 is the last line built for Java 8; later lines call
+    // ByteBuffer methods that Android doesn't provide. See RepoForgeApp for the Android setup it needs.
+    implementation("org.eclipse.jgit:org.eclipse.jgit:5.13.5.202508271544-r")
+    // Claude API, for AI merge-conflict resolution.
+    implementation("com.anthropic:anthropic-java:2.70.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")

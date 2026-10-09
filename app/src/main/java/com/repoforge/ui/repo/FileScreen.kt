@@ -42,6 +42,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,6 +64,7 @@ import com.repoforge.data.forge.ForgeClient
 import com.repoforge.data.forge.WebLinks
 import com.repoforge.data.model.Account
 import com.repoforge.data.model.FileBlob
+import com.repoforge.data.model.ForgeType
 import com.repoforge.data.model.Repo
 import com.repoforge.ui.common.Loadable
 import com.repoforge.ui.common.LoadableContent
@@ -69,19 +72,62 @@ import com.repoforge.ui.common.MarkdownView
 import com.repoforge.ui.common.copyToClipboard
 import com.repoforge.ui.common.openUrl
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import com.repoforge.ui.common.TextEditorDialog
+import com.repoforge.ui.common.userMessage
+import androidx.compose.material.icons.filled.Edit
+import java.io.File
 
+/**
+ * A file to view: from a hosting service (with web links for relative Markdown links and images)
+ * or from a clone on the device.
+ */
 class FileModel(
-    scope: CoroutineScope,
-    val account: Account,
-    client: ForgeClient,
-    val repo: Repo,
-    val ref: String,
+    private val scope: CoroutineScope,
     val path: String,
+    /** Second line of the title bar, e.g. "repo @ main". */
+    val source: String,
+    /** Resolves repository paths to browser and raw URLs; null for local files. */
+    val links: RepoLinks?,
+    /** The file in a working copy on the device, which can be edited; null for remote files. */
+    val localFile: File? = null,
+    loader: suspend () -> FileBlob,
 ) {
-    val blob = Loadable(scope) { client.getFile(repo, ref, path) }
+    val blob = Loadable(scope, loader)
     var showSource by mutableStateOf(false)
     var wrapLines by mutableStateOf(false)
-    val webUrl: String? get() = WebLinks.blob(account.type, repo, ref, path)
+    var saveError by mutableStateOf<String?>(null)
+    val webUrl: String? get() = links?.blob(path)
+
+    /** Writes new contents to [localFile] and reloads it. */
+    fun save(text: String) {
+        val file = localFile ?: return
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { file.writeText(text) }
+                saveError = null
+                blob.refresh()
+            } catch (e: Exception) {
+                saveError = e.userMessage()
+            }
+        }
+    }
+
+    companion object {
+        fun remote(scope: CoroutineScope, account: Account, client: ForgeClient, repo: Repo, ref: String, path: String) =
+            FileModel(scope, path, "${repo.name} @ $ref", RepoLinks(account.type, repo, ref)) { client.getFile(repo, ref, path) }
+
+        fun local(scope: CoroutineScope, root: File, name: String, path: String) =
+            FileModel(scope, path, "$name · on this device", null, File(root, path)) {
+                withContext(Dispatchers.IO) { FileBlob(path, File(root, path).readBytes()) }
+            }
+    }
+}
+
+/** Web and raw URLs for paths in one repository at one ref. */
+class RepoLinks(private val type: ForgeType, private val repo: Repo, private val ref: String) {
+    fun blob(path: String): String? = WebLinks.blob(type, repo, ref, path)
+    fun raw(path: String): String? = WebLinks.raw(type, repo, ref, path)
 }
 
 /** Files above this size show only their first lines, to keep scrolling smooth. */
@@ -92,6 +138,7 @@ private const val MAX_LINES = 20_000
 fun FileScreen(model: FileModel, onBack: () -> Unit) {
     val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
     val blob = model.blob.value
 
     Scaffold(
@@ -103,7 +150,7 @@ fun FileScreen(model: FileModel, onBack: () -> Unit) {
                         Text(model.path.substringAfterLast('/'), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
                             listOfNotNull(
-                                "${model.repo.name} @ ${model.ref}",
+                                model.source,
                                 blob?.takeIf { !it.isBinary && !it.isImage }?.let { "${it.text.count { c -> c == '\n' } + 1} lines" },
                                 blob?.let { formatSize(it.bytes.size.toLong()) },
                             ).joinToString(" · "),
@@ -114,6 +161,9 @@ fun FileScreen(model: FileModel, onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    if (model.localFile != null && blob != null && !blob.isBinary && !blob.isImage) {
+                        IconButton(onClick = { editing = true }) { Icon(Icons.Filled.Edit, "Edit") }
+                    }
                     IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, "More") }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         if (blob != null && blob.isMarkdown) {
@@ -156,13 +206,13 @@ fun FileScreen(model: FileModel, onBack: () -> Unit) {
                     file.isImage -> ZoomableImage(file)
                     file.isBinary -> BinaryNotice(file) { model.webUrl?.let { openUrl(context, it) } }
                     file.isMarkdown && !model.showSource -> {
-                        val type = model.account.type
+                        val links = model.links
                         val markdown = remember(file) {
-                            WebLinks.rewriteImages(file.text, file.path) { WebLinks.raw(type, model.repo, model.ref, it) }
+                            if (links == null) file.text else WebLinks.rewriteImages(file.text, file.path) { links.raw(it) }
                         }
                         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
                             MarkdownView(markdown, resolveLink = { link ->
-                                WebLinks.resolveRelative(link, file.path)?.let { WebLinks.blob(type, model.repo, model.ref, it) }
+                                WebLinks.resolveRelative(link, file.path)?.let { links?.blob(it) }
                             })
                         }
                     }
@@ -170,6 +220,23 @@ fun FileScreen(model: FileModel, onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    if (editing && blob != null) {
+        TextEditorDialog(
+            title = model.path.substringAfterLast('/'),
+            initial = blob.text,
+            onDismiss = { editing = false },
+            onSave = { editing = false; model.save(it) },
+        )
+    }
+    model.saveError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { model.saveError = null },
+            title = { Text("Couldn't save") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = { model.saveError = null }) { Text("OK") } },
+        )
     }
 }
 

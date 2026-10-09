@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import com.repoforge.data.forge.ForgeClient
 import com.repoforge.data.model.Account
 import com.repoforge.data.model.Branch
+import com.repoforge.data.model.CiRun
 import com.repoforge.data.model.Commit
 import com.repoforge.data.model.FileBlob
 import com.repoforge.data.model.Issue
@@ -16,7 +17,7 @@ import com.repoforge.ui.common.Loadable
 import com.repoforge.ui.common.Paged
 import kotlinx.coroutines.CoroutineScope
 
-enum class RepoTab { CODE, COMMITS, ISSUES, PULLS }
+enum class RepoTab { CODE, COMMITS, ISSUES, PULLS, CI }
 
 /** State for one open repository: the current branch and folder, and each tab's lists. */
 class RepoModel(
@@ -40,6 +41,8 @@ class RepoModel(
     private val commits = mutableMapOf<String, Paged<Commit>>()
     private val issues = mutableMapOf<StateFilter, Paged<Issue>>()
     private val pulls = mutableMapOf<StateFilter, Paged<Issue>>()
+    /** CI runs across all branches. */
+    val ciRuns = Paged<CiRun>(scope) { client.listCiRuns(repo, it) }
 
     fun tree(): Loadable<List<TreeEntry>> {
         val ref = ref

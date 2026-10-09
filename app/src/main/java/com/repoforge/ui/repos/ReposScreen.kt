@@ -1,5 +1,8 @@
 package com.repoforge.ui.repos
 
+import androidx.compose.ui.res.painterResource
+import com.repoforge.R
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -98,6 +101,7 @@ fun ReposScreen(
     onManageAccounts: () -> Unit,
     onAddAccount: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenLocal: () -> Unit = {},
 ) {
     val account = model.account
     var menuOpen by remember { mutableStateOf(false) }
@@ -136,6 +140,7 @@ fun ReposScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenLocal) { Icon(painterResource(R.drawable.ic_phone), "On this device") }
                     IconButton(onClick = onOpenSettings) { Icon(Icons.Filled.Settings, "Settings") }
                 },
             )
