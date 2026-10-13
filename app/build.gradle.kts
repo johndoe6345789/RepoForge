@@ -129,7 +129,7 @@ dependencies {
 
     // Local git (clone/pull/commit/push/merge). 5.13 is the last line built for Java 8; later lines call
     // ByteBuffer methods that Android doesn't provide. See RepoForgeApp for the Android setup it needs.
-    implementation("org.eclipse.jgit:org.eclipse.jgit:5.13.5.202508271544-r")
+    implementation("org.eclipse.jgit:org.eclipse.jgit:7.8.0.202609011348-r")
     // Claude API, for AI merge-conflict resolution.
     implementation("com.anthropic:anthropic-java:2.71.0")
 
