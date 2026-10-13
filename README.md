@@ -25,6 +25,16 @@ Pull requests build the same APKs as workflow artifacts in the [Actions tab](../
 
 - **Accounts** for GitHub.com and GitHub Enterprise, GitLab.com and self-managed GitLab, Bitbucket Cloud,
   and any Gitea or Forgejo server. Tokens are encrypted with the Android Keystore.
+- **Draft pull requests**: open a pull/merge request as a draft, convert it to a draft or mark it ready for
+  review from its merge panel. GitHub uses the draft flag (and GraphQL to flip it), Bitbucket the `draft` field,
+  GitLab a `Draft:` title prefix and Gitea/Forgejo a `WIP:` prefix.
+- **Mergeability check**: the merge panel shows conflicts, blocks, drafts and failing checks, and keeps
+  re-checking while the service is still working it out. Merging, or changing draft state, updates the pull
+  request list behind it.
+- **Comment templates**: canned comments in the comment box. Dependabot's documented commands (`rebase`,
+  `recreate`, `ignore this major/minor/patch version`, `ignore this dependency`, `show … ignore conditions`)
+  appear on Dependabot's pull requests, and `@copilot` requests (fix checks, resolve conflicts, address review
+  comments, add tests, or your own) on Copilot's.
 - **Repositories**: your repositories with language, stars and visibility at a glance, an instant filter,
   and server-wide search.
 - **Code**: browse folders on any branch, syntax-highlighted files with line numbers, rendered Markdown

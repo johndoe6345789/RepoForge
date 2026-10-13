@@ -16,6 +16,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import com.repoforge.data.templates.TemplateGroup
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -51,6 +59,8 @@ import com.repoforge.data.forge.WebLinks
 import com.repoforge.data.model.Account
 import com.repoforge.data.model.Comment
 import com.repoforge.data.model.Issue
+import com.repoforge.data.templates.CommentTemplate
+import com.repoforge.data.templates.CommentTemplates
 import com.repoforge.data.model.IssueState
 import com.repoforge.data.model.MergeMethod
 import com.repoforge.data.model.PullDetail
@@ -80,6 +90,8 @@ class IssueModel(
     private val client: ForgeClient,
     val repo: Repo,
     initial: Issue,
+    /** Called after something changed that other screens list, e.g. a merge (so the open list drops the pull request). */
+    private val onChanged: () -> Unit = {},
 ) {
     /** Updated after a merge so the header shows the new state. */
     var issue by mutableStateOf(initial)
@@ -98,6 +110,7 @@ class IssueModel(
         runAction {
             val outcome = client.mergePullRequest(repo, detail, method, title, message, deleteBranch)
             issue = issue.copy(state = IssueState.MERGED)
+            onChanged()
             notice = when {
                 outcome.pending -> "Merge started; it will finish shortly"
                 outcome.branchError != null -> "Merged, but the branch wasn't deleted: ${outcome.branchError}"
@@ -107,6 +120,20 @@ class IssueModel(
             pull.refresh()
         }
     }
+
+    /** Converts to a draft, or marks ready for review, then re-reads the merge state. */
+    fun toggleDraft() {
+        val toDraft = !issue.isDraft
+        runAction {
+            issue = client.setDraft(repo, issue, toDraft)
+            notice = if (toDraft) "Converted to draft" else "Marked ready for review"
+            pull.refresh()
+            onChanged()
+        }
+    }
+
+    /** Canned comments that fit this pull request (Dependabot / Copilot commands on their own pull requests). */
+    val templates: List<CommentTemplate> get() = CommentTemplates.forPullRequest(account.type, issue)
 
     fun deleteBranch() {
         val detail = pull.value ?: return
@@ -310,8 +337,37 @@ private fun CommentCard(author: String?, avatar: String?, time: java.time.Instan
 
 @Composable
 private fun CommentComposer(model: IssueModel) {
+    val templates = model.templates
+    var menuOpen by remember { mutableStateOf(false) }
+    var filling by remember { mutableStateOf<CommentTemplate?>(null) }
     Surface(tonalElevation = 3.dp) {
         Column(Modifier.navigationBarsPadding().imePadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            if (templates.isNotEmpty()) {
+                Box {
+                    TextButton(onClick = { menuOpen = true }) { Text("Insert template…") }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        var lastGroup: TemplateGroup? = null
+                        templates.forEach { template ->
+                            if (template.group != lastGroup) {
+                                lastGroup = template.group
+                                Text(
+                                    template.group.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text(template.label) },
+                                onClick = {
+                                    menuOpen = false
+                                    if (template.params.isEmpty()) model.draft = template.render() else filling = template
+                                },
+                            )
+                        }
+                    }
+                }
+            }
             model.sendError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
@@ -331,4 +387,36 @@ private fun CommentComposer(model: IssueModel) {
             }
         }
     }
+    filling?.let { template ->
+        TemplateValuesDialog(template, onDismiss = { filling = null }, onInsert = { model.draft = it; filling = null })
+    }
+}
+
+/** Asks for the values a template needs, e.g. which dependency to show ignore conditions for. */
+@Composable
+private fun TemplateValuesDialog(template: CommentTemplate, onDismiss: () -> Unit, onInsert: (String) -> Unit) {
+    val values = remember { mutableStateMapOf<String, String>() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(template.label) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                template.params.forEach { name ->
+                    OutlinedTextField(
+                        value = values[name].orEmpty(),
+                        onValueChange = { values[name] = it },
+                        label = { Text(name.replace('_', ' ')) },
+                        singleLine = true,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onInsert(template.render(values)) },
+                enabled = template.params.all { !values[it].isNullOrBlank() },
+            ) { Text("Insert") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

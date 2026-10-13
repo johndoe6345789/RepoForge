@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import com.repoforge.R
 import com.repoforge.data.model.IssueState
 import com.repoforge.data.model.MergeMethod
@@ -56,6 +57,19 @@ fun MergePanel(model: IssueModel, onResolveConflicts: (PullDetail) -> Unit, modi
     var confirmDelete by remember { mutableStateOf(false) }
     val detail = model.pull.value
     val issue = model.issue
+
+    // GitHub and GitLab work out mergeability in the background, so keep asking (with growing gaps) instead of
+    // leaving "Still checking" on screen until the user taps refresh.
+    val checking = detail?.mergeability == Mergeability.CHECKING
+    LaunchedEffect(model, checking) {
+        if (!checking) return@LaunchedEffect
+        var wait = 1_500L
+        repeat(6) {
+            delay(wait)
+            model.pull.refresh()
+            wait = wait * 3 / 2
+        }
+    }
 
     Card(
         modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
@@ -125,8 +139,11 @@ fun MergePanel(model: IssueModel, onResolveConflicts: (PullDetail) -> Unit, modi
                             Button(onClick = { onResolveConflicts(detail) }, enabled = !model.busy && detail.headCloneUrl != null) {
                                 Text("Resolve with AI")
                             }
+                        } else if (issue.isDraft) {
+                            Button(onClick = model::toggleDraft, enabled = !model.busy) { Text("Ready for review") }
                         } else {
                             Button(onClick = { showDialog = true }, enabled = !model.busy) { Text("Merge…") }
+                            OutlinedButton(onClick = model::toggleDraft, enabled = !model.busy) { Text("Convert to draft") }
                         }
                         if (model.busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                     }

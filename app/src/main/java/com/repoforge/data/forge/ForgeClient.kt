@@ -55,6 +55,12 @@ interface ForgeClient {
 
     suspend fun createIssue(repo: Repo, title: String, body: String): Issue
 
+    /** Opens a pull/merge request from [head] into [base], optionally as a draft. */
+    suspend fun createPullRequest(repo: Repo, title: String, body: String, head: String, base: String, draft: Boolean): Issue
+
+    /** Converts a pull request to a draft, or marks it ready for review. Returns the updated pull request. */
+    suspend fun setDraft(repo: Repo, pull: Issue, draft: Boolean): Issue
+
     /** Merge methods the service offers (a repository may still disallow some). */
     val mergeMethods: List<MergeMethod>
 

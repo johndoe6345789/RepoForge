@@ -16,6 +16,7 @@ import com.repoforge.data.model.EntryType
 import com.repoforge.data.model.ChangeType
 import com.repoforge.data.model.FileBlob
 import com.repoforge.data.model.FileDiff
+import com.repoforge.data.model.DraftTitle
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.IssueState
 import com.repoforge.data.model.MergeMethod
@@ -162,6 +163,24 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
         val url = http.url { seg("projects", repo.apiId, "issues") }
         val json = http.postJson(url, buildJsonObject { put("title", title); put("description", body) }).json
         return parseIssue(json.asObject(), isPullRequest = false)
+    }
+
+    override suspend fun createPullRequest(repo: Repo, title: String, body: String, head: String, base: String, draft: Boolean): Issue {
+        val url = http.url { seg("projects", repo.apiId, "merge_requests") }
+        val json = http.postJson(url, buildJsonObject {
+            put("title", DraftTitle.apply(title, draft, DRAFT_PREFIX))
+            put("description", body); put("source_branch", head); put("target_branch", base)
+        }).json
+        return parseIssue(json.asObject(), isPullRequest = true)
+    }
+
+    override suspend fun setDraft(repo: Repo, pull: Issue, draft: Boolean): Issue {
+        val url = http.url { seg("projects", repo.apiId, "merge_requests", pull.number.toString()) }
+        val current = http.getJson { seg("projects", repo.apiId, "merge_requests", pull.number.toString()) }.json.asObject()
+        val currentTitle = current.str("title").orEmpty()
+        if (parseIssue(current, true).isDraft == draft) return parseIssue(current, isPullRequest = true)
+        val json = http.putJson(url, buildJsonObject { put("title", DraftTitle.apply(currentTitle, draft, DRAFT_PREFIX)) }).json
+        return parseIssue(json.asObject(), isPullRequest = true)
     }
 
     override val mergeMethods = listOf(MergeMethod.MERGE, MergeMethod.SQUASH)
@@ -385,6 +404,8 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
             )
         }
 
+        private const val DRAFT_PREFIX = "Draft:"
+
         fun parseIssue(json: JsonObject, isPullRequest: Boolean) = Issue(
             number = json.long("iid") ?: 0,
             title = json.str("title").orEmpty(),
@@ -400,7 +421,8 @@ class GitLabClient(client: OkHttpClient, apiBase: String, token: String) : Forge
             commentCount = json.int("user_notes_count"),
             labels = json.arr("labels")?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty(),
             isPullRequest = isPullRequest,
-            isDraft = json.bool("draft") == true || json.bool("work_in_progress") == true,
+            isDraft = json.bool("draft") == true || json.bool("work_in_progress") == true ||
+                DraftTitle.isDraft(json.str("title").orEmpty()),
             webUrl = json.str("web_url"),
             sourceBranch = json.str("source_branch"),
             targetBranch = json.str("target_branch"),

@@ -92,4 +92,9 @@ class RepoModel(
     fun issuesChanged() {
         issues.values.forEach { it.refresh() }
     }
+
+    /** Called after a pull request is created, merged, closed or changes draft state, so every cached list is re-read. */
+    fun pullsChanged() {
+        pulls.values.forEach { it.refresh() }
+    }
 }
