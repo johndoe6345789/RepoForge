@@ -131,7 +131,7 @@ dependencies {
     // ByteBuffer methods that Android doesn't provide. See RepoForgeApp for the Android setup it needs.
     implementation("org.eclipse.jgit:org.eclipse.jgit:5.13.5.202508271544-r")
     // Claude API, for AI merge-conflict resolution.
-    implementation("com.anthropic:anthropic-java:2.70.0")
+    implementation("com.anthropic:anthropic-java:2.71.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
