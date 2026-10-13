@@ -13,6 +13,7 @@ import com.repoforge.data.model.Commit
 import com.repoforge.data.model.EntryType
 import com.repoforge.data.model.FileBlob
 import com.repoforge.data.model.FileDiff
+import com.repoforge.data.model.DraftTitle
 import com.repoforge.data.model.Issue
 import com.repoforge.data.model.MergeMethod
 import com.repoforge.data.model.MergeOutcome
@@ -166,12 +167,32 @@ class GiteaClient(client: OkHttpClient, apiBase: String, token: String) : ForgeC
         return GitHubClient.parseIssue(json.asObject()).copy(isPullRequest = false)
     }
 
+    override suspend fun createPullRequest(repo: Repo, title: String, body: String, head: String, base: String, draft: Boolean): Issue {
+        val url = http.url { seg("repos"); path(repo.apiId); seg("pulls") }
+        val json = http.postJson(url, buildJsonObject {
+            put("title", DraftTitle.apply(title, draft, DRAFT_PREFIX)); put("body", body); put("head", head); put("base", base)
+        }).json
+        return asPull(GitHubClient.parseIssue(json.asObject()))
+    }
+
+    override suspend fun setDraft(repo: Repo, pull: Issue, draft: Boolean): Issue {
+        val url = http.url { seg("repos"); path(repo.apiId); seg("pulls", pull.number.toString()) }
+        val current = asPull(GitHubClient.parseIssue(http.getJson { seg("repos"); path(repo.apiId); seg("pulls", pull.number.toString()) }.json.asObject()))
+        if (current.isDraft == draft) return current
+        // Gitea has no draft flag in its API; the WIP title prefix is what it reads.
+        return asPull(GitHubClient.parseIssue(http.patchJson(url, buildJsonObject {
+            put("title", DraftTitle.apply(current.title, draft, DRAFT_PREFIX))
+        }).json.asObject()))
+    }
+
+    private fun asPull(issue: Issue) = issue.copy(isPullRequest = true, isDraft = issue.isDraft || DraftTitle.isDraft(issue.title))
+
     override val mergeMethods = listOf(MergeMethod.MERGE, MergeMethod.SQUASH, MergeMethod.REBASE, MergeMethod.FAST_FORWARD)
 
     override suspend fun getPullRequest(repo: Repo, number: Long): PullDetail {
         val json = http.getJson { seg("repos"); path(repo.apiId); seg("pulls", number.toString()) }.json.asObject()
         val detail = GitHubClient.parsePullDetail(json)
-        return detail.copy(pull = detail.pull.copy(isPullRequest = true))
+        return detail.copy(pull = asPull(detail.pull))
     }
 
     override suspend fun mergePullRequest(
@@ -288,6 +309,8 @@ class GiteaClient(client: OkHttpClient, apiBase: String, token: String) : ForgeC
         Page(items, if (result.hasNextLink) page + 1 else null)
 
     companion object {
+        private const val DRAFT_PREFIX = "WIP:"
+
         private const val MAX_PAGES = 10
         private const val TASK_PREFIX = "task-"
 

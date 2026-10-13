@@ -15,6 +15,7 @@ import com.repoforge.ui.accounts.AccountsScreen
 import com.repoforge.ui.accounts.AddAccountScreen
 import com.repoforge.ui.issue.IssueScreen
 import com.repoforge.ui.issue.NewIssueScreen
+import com.repoforge.ui.issue.NewPullRequestScreen
 import com.repoforge.ui.repo.CommitScreen
 import com.repoforge.ui.repo.FileScreen
 import com.repoforge.ui.repo.RepoScreen
@@ -81,6 +82,7 @@ fun RepoForgeRoot(vm: AppViewModel) {
                 onOpenIssue = { vm.openIssue(screen.model.account, screen.model.repo, it) },
                 onOpenCommit = { vm.openCommit(screen.model.account, screen.model.repo, it) },
                 onNewIssue = { vm.newIssue(screen.model) },
+                onNewPullRequest = { vm.newPullRequest(screen.model) },
                 onOpenRun = { vm.openCiRun(screen.model, it) },
                 localClone = vm.localCloneOf(screen.model.account, screen.model.repo, clones),
                 onClone = { vm.cloneRepo(screen.model.account, screen.model.repo) },
@@ -94,6 +96,7 @@ fun RepoForgeRoot(vm: AppViewModel) {
                 onResolveConflicts = { vm.openConflicts(screen.model, it) },
             )
             is Screen.NewIssue -> NewIssueScreen(model = screen.model, onBack = { vm.back() })
+            is Screen.NewPullRequest -> NewPullRequestScreen(model = screen.model, onBack = { vm.back() })
             is Screen.Conflicts -> ConflictScreen(
                 model = screen.model,
                 onBack = { vm.back() },

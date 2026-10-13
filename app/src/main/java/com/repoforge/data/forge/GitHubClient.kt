@@ -39,12 +39,13 @@ import com.repoforge.data.net.objects
 import com.repoforge.data.net.str
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import java.util.Base64
 
 /** GitHub.com (api.github.com) and GitHub Enterprise Server (`<host>/api/v3`). */
-class GitHubClient(client: OkHttpClient, apiBase: String, token: String) : ForgeClient {
+class GitHubClient(client: OkHttpClient, private val apiBase: String, token: String) : ForgeClient {
 
     private val http = Http(client, apiBase) {
         header("X-GitHub-Api-Version", "2022-11-28")
@@ -191,6 +192,31 @@ class GitHubClient(client: OkHttpClient, apiBase: String, token: String) : Forge
     }
 
     override val mergeMethods = listOf(MergeMethod.MERGE, MergeMethod.SQUASH, MergeMethod.REBASE)
+
+    override suspend fun createPullRequest(repo: Repo, title: String, body: String, head: String, base: String, draft: Boolean): Issue {
+        val url = http.url { seg("repos"); path(repo.apiId); seg("pulls") }
+        val json = http.postJson(url, buildJsonObject {
+            put("title", title); put("body", body); put("head", head); put("base", base); put("draft", draft)
+        }).json
+        return parseIssue(json.asObject()).copy(isPullRequest = true)
+    }
+
+    override suspend fun setDraft(repo: Repo, pull: Issue, draft: Boolean): Issue {
+        val current = http.getJson { seg("repos"); path(repo.apiId); seg("pulls", pull.number.toString()) }.json.asObject()
+        if ((current.bool("draft") == true) == draft) return parseIssue(current).copy(isPullRequest = true)
+        // The REST API can't change draft state; only GraphQL can.
+        val mutation = if (draft) "convertPullRequestToDraft" else "markPullRequestReadyForReview"
+        val response = http.postJson(graphqlUrl(), buildJsonObject {
+            put("query", "mutation(\$id: ID!) { $mutation(input: {pullRequestId: \$id}) { pullRequest { isDraft } } }")
+            putJsonObject("variables") { put("id", current.str("node_id").orEmpty()) }
+        }).json.asObject()
+        response.arr("errors")?.objects()?.firstOrNull()?.let { throw ForgeException(422, it.str("message") ?: "GitHub refused the change") }
+        return parseIssue(http.getJson { seg("repos"); path(repo.apiId); seg("pulls", pull.number.toString()) }.json.asObject())
+            .copy(isPullRequest = true)
+    }
+
+    /** github.com: `api.github.com/graphql`; Enterprise Server: `<host>/api/graphql` next to `<host>/api/v3`. */
+    private fun graphqlUrl() = (apiBase.trimEnd('/').removeSuffix("/v3") + "/graphql").toHttpUrl()
 
     override suspend fun getPullRequest(repo: Repo, number: Long): PullDetail {
         val json = http.getJson { seg("repos"); path(repo.apiId); seg("pulls", number.toString()) }.json.asObject()

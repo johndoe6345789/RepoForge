@@ -116,6 +116,8 @@ class Http(
 
     suspend fun putJson(url: HttpUrl, body: JsonObject): HttpResult = send("PUT", url, body)
 
+    suspend fun patchJson(url: HttpUrl, body: JsonObject): HttpResult = send("PATCH", url, body)
+
     suspend fun delete(url: HttpUrl): HttpResult = send("DELETE", url, null)
 
     suspend fun send(method: String, url: HttpUrl, body: JsonObject?): HttpResult =

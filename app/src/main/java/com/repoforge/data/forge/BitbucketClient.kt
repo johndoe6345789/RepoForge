@@ -247,6 +247,22 @@ class BitbucketClient(client: OkHttpClient, apiBase: String, email: String?, tok
         return parseIssue(json.asObject())
     }
 
+    override suspend fun createPullRequest(repo: Repo, title: String, body: String, head: String, base: String, draft: Boolean): Issue {
+        val url = http.url { repoPath(repo); seg("pullrequests") }
+        val json = http.postJson(url, buildJsonObject {
+            put("title", title); put("description", body); put("draft", draft)
+            putJsonObject("source") { putJsonObject("branch") { put("name", head) } }
+            putJsonObject("destination") { putJsonObject("branch") { put("name", base) } }
+        }).json
+        return parsePullRequest(json.asObject())
+    }
+
+    override suspend fun setDraft(repo: Repo, pull: Issue, draft: Boolean): Issue {
+        val url = http.url { repoPath(repo); seg("pullrequests", pull.number.toString()) }
+        val json = http.putJson(url, buildJsonObject { put("draft", draft) }).json
+        return parsePullRequest(json.asObject())
+    }
+
     override val mergeMethods = listOf(MergeMethod.MERGE, MergeMethod.SQUASH, MergeMethod.FAST_FORWARD)
 
     override suspend fun getPullRequest(repo: Repo, number: Long): PullDetail {

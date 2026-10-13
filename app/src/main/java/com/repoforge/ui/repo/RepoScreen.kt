@@ -105,6 +105,7 @@ fun RepoScreen(
     onOpenIssue: (Issue) -> Unit,
     onOpenCommit: (Commit) -> Unit,
     onNewIssue: () -> Unit,
+    onNewPullRequest: () -> Unit = {},
     onOpenRun: (CiRun) -> Unit = {},
     /** This repository's clone on the device, if any. */
     localClone: LocalClone? = null,
@@ -175,6 +176,12 @@ fun RepoScreen(
         floatingActionButton = {
             if (model.tab == RepoTab.ISSUES) {
                 ExtendedFloatingActionButton(onClick = onNewIssue, icon = { Icon(Icons.Filled.Add, null) }, text = { Text("New issue") })
+            } else if (model.tab == RepoTab.PULLS) {
+                ExtendedFloatingActionButton(
+                    onClick = onNewPullRequest,
+                    icon = { Icon(Icons.Filled.Add, null) },
+                    text = { Text("New ${model.account.type.pullRequestName.removeSuffix("s").lowercase()}") },
+                )
             }
         },
     ) { padding ->

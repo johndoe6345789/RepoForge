@@ -34,6 +34,7 @@ import java.io.File
 import com.repoforge.ui.accounts.AddAccountModel
 import com.repoforge.ui.issue.IssueModel
 import com.repoforge.ui.issue.NewIssueModel
+import com.repoforge.ui.issue.NewPullRequestModel
 import com.repoforge.ui.repo.CommitModel
 import com.repoforge.ui.repo.FileModel
 import com.repoforge.ui.repo.RepoModel
@@ -50,6 +51,7 @@ sealed interface Screen {
     class CommitDetail(val model: CommitModel) : Screen
     class IssueDetail(val model: IssueModel) : Screen
     class NewIssue(val model: NewIssueModel) : Screen
+    class NewPullRequest(val model: NewPullRequestModel) : Screen
     class Conflicts(val model: ConflictModel, val issue: IssueModel) : Screen
     class CiRunDetail(val model: CiRunModel) : Screen
     class CiLog(val model: CiLogModel) : Screen
@@ -138,7 +140,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openIssue(account: Account, repo: Repo, issue: Issue) {
-        stack += Screen.IssueDetail(IssueModel(viewModelScope, account, clientFor(account), repo, issue))
+        // A merge or draft change must show up in the repository's lists behind this screen.
+        val repoModel = stack.filterIsInstance<Screen.RepoHome>().map { it.model }
+            .lastOrNull { it.account.id == account.id && it.repo.apiId == repo.apiId }
+        val model = IssueModel(viewModelScope, account, clientFor(account), repo, issue) {
+            repoModel?.pullsChanged()
+            repoModel?.issuesChanged()
+        }
+        stack += Screen.IssueDetail(model)
+    }
+
+    fun newPullRequest(repoModel: RepoModel) {
+        val model = NewPullRequestModel(viewModelScope, repoModel.account, repoModel.client, repoModel.repo, repoModel.ref) { created ->
+            stack.removeAt(stack.lastIndex)
+            repoModel.pullsChanged()
+            openIssue(repoModel.account, repoModel.repo, created)
+        }
+        stack += Screen.NewPullRequest(model)
     }
 
     fun newIssue(repoModel: RepoModel) {

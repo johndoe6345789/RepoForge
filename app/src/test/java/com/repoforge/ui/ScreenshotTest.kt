@@ -437,6 +437,8 @@ private class SampleClient : ForgeClient {
     )
     override suspend fun downloadCiArtifact(artifact: CiArtifact, out: java.io.OutputStream, onProgress: (Long, Long?) -> Unit) = 0L
     override suspend fun createIssue(repo: Repo, title: String, body: String) = issues.first()
+    override suspend fun createPullRequest(repo: Repo, title: String, body: String, head: String, base: String, draft: Boolean) = issues.first().copy(isDraft = draft)
+    override suspend fun setDraft(repo: Repo, pull: Issue, draft: Boolean) = pull.copy(isDraft = draft)
 }
 
 private val SAMPLE_DIFF = """
