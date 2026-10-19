@@ -122,9 +122,9 @@ dependencies {
 
     implementation("io.coil-kt.coil3:coil-compose:3.6.3")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")
-    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.45.0")
-    implementation("com.mikepenz:multiplatform-markdown-renderer-coil3:0.45.0")
-    implementation("com.mikepenz:multiplatform-markdown-renderer-code:0.45.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.46.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-coil3:0.46.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-code:0.46.0")
     implementation("dev.snipme:highlights:1.1.0")
 
     // Local git (clone/pull/commit/push/merge). 5.13 is the last line built for Java 8; later lines call
